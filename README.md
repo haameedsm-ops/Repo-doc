@@ -1,97 +1,211 @@
 # 🩺 Repo Doctor
 
-> **A developer-focused repository health scanner that diagnoses code quality, security, dependencies, Git health, and project structure.**
+**Repo Doctor** is a developer-focused repository health analyzer built with Python.
 
-Repo Doctor is a Python-based developer tool designed to inspect a software repository and provide a quick, practical health report.
+It scans a software project and provides a simple health report covering **security, code quality, dependencies, Git health, project structure, and documentation**.
 
-Instead of manually checking files, dependencies, security issues, and Git history, Repo Doctor brings the important signals together into one terminal-based diagnosis.
+The goal is simple:
+
+> **Scan → Diagnose → Explain → Improve**
 
 ---
 
-## ✨ What Repo Doctor Checks
+## ✨ Features
 
 ### 🧬 Project DNA
-Analyzes the repository structure and identifies the programming languages being used.
+
+Repo Doctor identifies the technologies used in a repository.
+
+It reports:
 
 - Source file count
 - Lines of code
-- Programming language distribution
-
-### 🔐 Security Scan
-Looks for obvious security risks such as hardcoded secrets.
-
-- API keys
-- Tokens
-- Password-like values
-- Other suspicious secret patterns
-
-### 🧹 Code Quality
-Detects maintainability problems that can make a project harder to work with.
-
-Currently checks for:
-
-- Large files
-- TODO / FIXME markers
-- Long Python functions
-- Long JavaScript functions
-- Python complexity
-- JavaScript complexity
-
-Each finding includes:
-
-- Severity
-- File location
-- Function name when applicable
-- Explanation
-- Recommendation
-- Priority
-
-### 📦 Dependency Analysis
-Analyzes supported dependency manifests.
-
-Currently supported:
-
-- `requirements.txt`
-- `package.json`
-
-Repo Doctor can:
-
-- Detect direct dependencies
-- Identify package versions
-- Check known vulnerabilities
-- Check dependency freshness
-- Report outdated packages
-
-Vulnerability intelligence is powered by the **OSV vulnerability database**.
-
-### 📜 Git Health
-Analyzes the repository's Git history.
-
-Reports:
-
-- Whether the repository is a Git repository
-- Number of commits
-- Number of contributors
-- Number of branches
-- Latest commit
-- Latest commit author
-
-### 🩺 Repository Health Score
-
-Repo Doctor generates separate health scores for:
-
-- 🔐 Security
-- 🧹 Code Quality
-- 📚 Documentation
-- 🩺 Overall Repository Health
-
-The final diagnosis provides a simple interpretation of the score.
+- Programming languages
+- Number of files for each language
 
 ---
 
-## 🖥️ Example
+### 🔐 Security Scanner
+
+Repo Doctor checks source files for obvious hardcoded secrets.
+
+It can detect suspicious patterns such as:
+
+- API keys
+- Access tokens
+- Password-like values
+- Secret-like strings
+
+Example:
 
 ```text
+🔐 SECURITY SCAN
+----------------------------------------
+✅ No obvious hardcoded secrets detected.
+
+This is a first-level security check and is not a replacement for a professional security audit.
+
+🧹 Code Quality Analyzer
+
+Repo Doctor identifies common maintainability problems.
+
+It currently checks for:
+
+Large files
+TODO / FIXME markers
+Long Python functions
+Long JavaScript functions
+Python complexity
+JavaScript complexity
+
+Each finding can include:
+
+Severity
+File location
+Function name
+Explanation
+Recommendation
+Priority
+
+Example:
+
+[HIGH] High JavaScript Complexity
+Function: LabConsole
+Estimated complexity: 28
+
+💡 Why:
+High branching and conditional logic creates many
+possible execution paths.
+
+🛠 Recommendation:
+Split the component into smaller components and move
+business logic into dedicated helper modules.
+📦 Dependency Analysis
+
+Repo Doctor analyzes supported dependency files.
+
+Currently supported:
+
+requirements.txt
+package.json
+
+It can report:
+
+Direct dependencies
+Installed/requested versions
+Known vulnerabilities
+Outdated dependencies
+Dependency statistics
+
+Vulnerability information is checked using the OSV vulnerability database.
+
+🔄 Dependency Freshness
+
+Repo Doctor can compare dependency versions with available latest versions.
+
+Example:
+
+🔄 DEPENDENCY FRESHNESS
+----------------------------------------
+⚠️ Outdated packages: 7
+
+@vitejs/plugin-react
+Current: 6.0.4
+Latest:  6.1.0
+Severity: MEDIUM
+
+This helps developers identify dependencies that may need updating.
+
+📜 Git Health
+
+Repo Doctor analyzes Git repository information.
+
+It reports:
+
+Git repository status
+Commit count
+Contributor count
+Branch count
+Latest commit
+Latest commit author
+
+Example:
+
+📜 GIT HEALTH
+----------------------------------------
+Git repository: YES
+Commits:        5
+Contributors:   1
+Branches:       1
+
+Last commit:
+    b183f0c — Fix portfolio navigation and scroll animations
+    Author: Haameed
+🩺 Repository Health Score
+
+Repo Doctor calculates separate scores for:
+
+🔐 Security
+🧹 Code Quality
+📚 Documentation
+🩺 Overall Repository Health
+
+Example:
+
+🩺 REPOSITORY HEALTH
+========================================
+Overall Health      92/100
+🔐 Security         100/100
+🧹 Code Quality     75/100
+📚 Documentation    100/100
+
+It also provides a simple final diagnosis:
+
+🟢 Excellent repository health.
+🚀 Getting Started
+Requirements
+
+You need:
+
+Python 3.10+
+Git
+Internet connection for vulnerability and dependency freshness checks
+📥 Installation
+
+Clone the repository:
+
+git clone https://github.com/haameedsm-ops/Repo-doc.git
+
+Enter the project:
+
+cd Repo-doc
+
+Install dependencies:
+
+pip install -r requirements.txt
+▶️ Usage
+
+Run:
+
+python main.py
+
+Repo Doctor will ask for the repository path:
+
+Enter repository path:
+
+Enter the path of the project you want to analyze.
+
+Example:
+
+C:\Users\YourName\Desktop\my-project
+
+Repo Doctor will then scan the repository and generate a complete health report.
+
+🖥️ Example Output
+🔎 Scanning repository...
+
+🔐 Scanning 12 npm dependencies...
+
 🩺 REPO DOCTOR
 ========================================
 Source files: 27
@@ -100,8 +214,8 @@ Lines of code: 4567
 🧬 PROJECT DNA
 ----------------------------------------
 JavaScript         15 files
-CSS                3 files
-HTML               1 files
+CSS                 3 files
+HTML                1 files
 
 🔐 SECURITY SCAN
 ----------------------------------------
@@ -111,17 +225,14 @@ HTML               1 files
 ----------------------------------------
 ⚠️ Quality issues found: 8
 
-[MEDIUM] Large File → src/App.css
-    3310 lines
-
-[HIGH] High JavaScript Complexity → src/components/LabConsole.jsx
-    Estimated complexity: 28
+[MEDIUM] Large File
+[MEDIUM] Long JavaScript Function
+[HIGH] High JavaScript Complexity
 
 📦 DEPENDENCY ANALYSIS
 ----------------------------------------
-📄 package.json
 Direct dependencies: 12
-    ✅ No known vulnerabilities found
+✅ No known vulnerabilities found
 
 📊 Dependency Summary
 ----------------------------------------
@@ -132,9 +243,6 @@ Total vulnerabilities: 0
 📜 GIT HEALTH
 ----------------------------------------
 Git repository: YES
-Commits:        5
-Contributors:   1
-Branches:       1
 
 🩺 REPOSITORY HEALTH
 ========================================
@@ -146,9 +254,7 @@ Overall Health      92/100
 🩺 DIAGNOSIS
 ----------------------------------------
 🟢 Excellent repository health.
-
 🏗️ Project Structure
-
 Repo-doc/
 │
 ├── main.py
@@ -165,28 +271,28 @@ Repo-doc/
 │
 ├── README.md
 └── requirements.txt
-⚙️ Requirements
-Python 3.10+
-Git
-Internet connection for vulnerability and dependency freshness checks
+🧠 How It Works
 
-Install Python dependencies:
+Repo Doctor follows a simple analysis pipeline:
 
-pip install -r requirements.txt
-🚀 Usage
-
-Run Repo Doctor:
-
-python main.py
-
-Enter the path of the repository you want to analyze:
-
-Enter repository path: C:\Users\YourName\Desktop\my-project
-
-Repo Doctor will scan the repository and generate the health report.
-
+Repository
+     │
+     ▼
+File Scanner
+     │
+     ├── Project DNA
+     ├── Security Analysis
+     ├── Code Quality Analysis
+     ├── Dependency Analysis
+     └── Git Analysis
+             │
+             ▼
+       Health Scoring
+             │
+             ▼
+        Diagnosis
 🔎 Supported Analysis
-Category	Supported
+Analysis	Status
 Repository scanning	✅
 Language detection	✅
 Lines of code	✅
@@ -195,25 +301,19 @@ Large file detection	✅
 TODO/FIXME detection	✅
 Python function analysis	✅
 JavaScript function analysis	✅
-Python complexity	✅
-JavaScript complexity	✅
-requirements.txt	✅
-package.json	✅
+Python complexity analysis	✅
+JavaScript complexity analysis	✅
+requirements.txt analysis	✅
+package.json analysis	✅
 Vulnerability scanning	✅
 Dependency freshness	✅
 Git analysis	✅
 Health scoring	✅
-🛡️ Design Philosophy
+🛠️ Technology Stack
 
-Repo Doctor is intended to be a developer assistant, not a replacement for professional security auditing or static-analysis platforms.
+Repo Doctor is built primarily with Python.
 
-The goal is to provide developers with:
-
-A fast first diagnosis of their repository before deeper review.
-
-It focuses on practical findings that developers can understand and act on immediately.
-
-🧠 Technology Stack
+Core technologies
 Python
 pathlib
 ast
@@ -221,13 +321,31 @@ re
 json
 requests
 Git
+Security intelligence
 OSV vulnerability database
+🎯 Project Philosophy
+
+Repo Doctor is designed as a developer-first repository diagnostic tool.
+
+Instead of giving developers raw technical information, it tries to answer three simple questions:
+
+1. What's wrong?
+
+Find potential problems.
+
+2. Why does it matter?
+
+Explain the problem in understandable language.
+
+3. What should I do?
+
+Provide a practical recommendation.
+
 🔮 Future Roadmap
 
 Planned improvements include:
 
- Deeper JavaScript/TypeScript AST analysis
- Safer automatic refactoring suggestions
+ Deeper JavaScript and TypeScript AST analysis
  Duplicate code detection
  Dead code detection
  Test coverage analysis
@@ -237,24 +355,36 @@ Planned improvements include:
  HTML report generation
  JSON report export
  Interactive web dashboard
- Repository comparison over time
- AI-assisted diagnosis and remediation
-🎯 Why This Project?
+ Repository health history
+ Repository comparison
+ AI-assisted diagnosis
+ Automated remediation suggestions
+⚠️ Limitations
 
-Modern repositories can contain thousands of lines of code, dozens of dependencies, security risks, and maintainability problems.
+Repo Doctor is intended to provide a fast first-level repository diagnosis.
 
-Repo Doctor aims to make the first health check simple:
+It should not be considered a replacement for:
 
-Scan → Diagnose → Explain → Improve
+Professional security audits
+Full static-analysis platforms
+Penetration testing
+Dependency management systems
+Manual code review
+
+A clean Repo Doctor report does not guarantee that a project is completely secure or bug-free.
+
 👨‍💻 Author
-
 Haameed
 
-Computer Science Engineering Student
-Interested in software development, cybersecurity, developer tools, and emerging technologies.
+Computer Science Engineering student interested in:
 
+Software Development
+Cybersecurity
+Developer Tools
+Artificial Intelligence
+Emerging Technologies
 📄 License
 
-This project is intended for learning, experimentation, and developer tooling.
+This project is currently intended for learning, experimentation, and developer tooling.
 
-Add an appropriate open-source license before distributing the project publicly.
+An open-source license can be added before public distribution.
