@@ -19,10 +19,7 @@ def calculate_security_score(findings):
         elif finding_type == "Vulnerable Dependency":
             vulnerable_packages += 1
 
-    # Hardcoded secrets are serious.
     score -= min(secret_count * 15, 60)
-
-    # Known vulnerable dependencies are also serious.
     score -= min(vulnerable_packages * 12, 40)
 
     return max(round(score), 0)
@@ -33,20 +30,32 @@ def calculate_security_score(findings):
 # ============================================================
 
 def calculate_quality_score(findings):
-    """Calculate code quality without over-penalising normal React code."""
+    """
+    Calculate a practical code-quality score.
+
+    The scanner is intentionally advisory: large files and long
+    React components are not automatically severe defects. Higher
+    penalties are reserved for complexity and security-related issues.
+    """
 
     score = 100
 
-    # Different findings have different practical impact.
     penalties = {
-        "Large File": 3,
-        "Long Function": 4,
-        "Long JavaScript Function": 4,
-        "Moderate Complexity": 4,
-        "Moderate JavaScript Complexity": 4,
-        "High Complexity": 8,
-        "High JavaScript Complexity": 8,
-        "JavaScript Security Pattern": 12,
+        # Structural warnings
+        "Large File": 2,
+        "Long Function": 3,
+        "Long JavaScript Function": 3,
+
+        # Complexity warnings
+        "Moderate Complexity": 3,
+        "Moderate JavaScript Complexity": 3,
+        "High Complexity": 6,
+        "High JavaScript Complexity": 6,
+
+        # Security-related quality finding
+        "JavaScript Security Pattern": 10,
+
+        # Maintenance warning
         "TODO/FIXME": 1,
     }
 
@@ -56,12 +65,11 @@ def calculate_quality_score(findings):
 
         deduction = penalties.get(finding_type)
 
-        # Fallback for future finding types.
         if deduction is None:
             if severity == "HIGH":
-                deduction = 8
+                deduction = 6
             elif severity == "MEDIUM":
-                deduction = 4
+                deduction = 3
             else:
                 deduction = 1
 
