@@ -2,29 +2,16 @@ import ast
 import re
 
 
-# ============================================================
-# QUALITY THRESHOLDS
-# ============================================================
-
-MAX_SOURCE_FILE_LINES = 500
-MAX_CSS_LINES = 5000
-MAX_JS_LINES = 500
+MAX_FILE_LINES = 300
 MAX_FUNCTION_LINES = 50
-MAX_JS_FUNCTION_LINES = 50
+MAX_JS_FUNCTION_LINES = 80
 
-
-# ============================================================
-# FILE TYPES
-# ============================================================
-
-SOURCE_EXTENSIONS = {
-    ".py", ".js", ".jsx", ".ts", ".tsx",
-    ".java", ".cpp", ".c", ".h", ".hpp",
-    ".go", ".rs", ".php", ".kt",
+JS_EXTENSIONS = {
+    ".js",
+    ".jsx",
+    ".ts",
+    ".tsx"
 }
-
-CSS_EXTENSIONS = {".css", ".scss", ".sass", ".less"}
-JS_EXTENSIONS = {".js", ".jsx", ".ts", ".tsx"}
 
 
 # ============================================================
@@ -33,275 +20,138 @@ JS_EXTENSIONS = {".js", ".jsx", ".ts", ".tsx"}
 
 def read_file(file):
     try:
-        return file.read_text(encoding="utf-8", errors="ignore")
+        return file.read_text(
+            encoding="utf-8",
+            errors="ignore"
+        )
     except (PermissionError, OSError):
         return ""
 
 
 # ============================================================
-# LARGE FILE DETECTION
+# LARGE FILE CHECK
 # ============================================================
 
 def check_large_files(files):
+
     findings = []
 
-    for file in files:
-        extension = file.suffix.lower()
+    binary_extensions = {
+        ".png",
+        ".jpg",
+        ".jpeg",
+        ".gif",
+        ".webp",
+        ".ico",
+        ".bmp",
+        ".mp4",
+        ".mp3",
+        ".woff",
+        ".woff2",
+        ".ttf",
+        ".zip",
+        ".pdf"
+    }
 
-        if extension not in SOURCE_EXTENSIONS | CSS_EXTENSIONS:
+    for file in files:
+
+        if file.suffix.lower() in binary_extensions:
             continue
 
         content = read_file(file)
+
         if not content:
             continue
 
         line_count = len(content.splitlines())
 
-        if extension in CSS_EXTENSIONS:
-            if line_count > MAX_CSS_LINES:
-                findings.append({
-                    "type": "Large Stylesheet",
-                    "file": str(file),
-                    "details": f"{line_count} lines",
-                    "severity": "LOW",
-                })
-        else:
-            threshold = MAX_JS_LINES if extension in JS_EXTENSIONS else MAX_SOURCE_FILE_LINES
+        if line_count > MAX_FILE_LINES:
 
-            if line_count > threshold:
-                findings.append({
-                    "type": "Large Source File",
-                    "file": str(file),
-                    "details": f"{line_count} lines",
-                    "severity": "MEDIUM",
-                })
+            findings.append({
+                "type": "Large File",
+                "file": str(file),
+                "details": f"{line_count} lines",
+                "severity": "MEDIUM",
+
+                "why": (
+                    "Large files are harder to navigate, "
+                    "maintain and review."
+                ),
+
+                "recommendation": (
+                    "Split the file into smaller, "
+                    "focused modules or components."
+                ),
+
+                "priority": "MEDIUM"
+            })
 
     return findings
 
 
 # ============================================================
-# TODO / FIXME DETECTION
+# TODO / FIXME CHECK
 # ============================================================
 
 def check_todos(files):
+
     findings = []
 
     for file in files:
-        extension = file.suffix.lower()
-        if extension not in SOURCE_EXTENSIONS | CSS_EXTENSIONS:
-            continue
 
         content = read_file(file)
+
         if not content:
             continue
 
-        for line_number, line in enumerate(content.splitlines(), start=1):
-            upper_line = line.upper()
+        for line_number, line in enumerate(
+            content.splitlines(),
+            start=1
+        ):
 
-            if "TODO" in upper_line or "FIXME" in upper_line:
+            if (
+                "TODO" in line.upper()
+                or "FIXME" in line.upper()
+            ):
+
                 findings.append({
                     "type": "TODO/FIXME",
                     "file": str(file),
                     "line": line_number,
                     "details": line.strip(),
                     "severity": "LOW",
+
+                    "why": (
+                        "TODO/FIXME markers usually indicate "
+                        "unfinished or deferred work."
+                    ),
+
+                    "recommendation": (
+                        "Resolve the task, convert it into "
+                        "a tracked issue, or remove the marker."
+                    ),
+
+                    "priority": "LOW"
                 })
 
     return findings
 
 
 # ============================================================
-# PYTHON LONG FUNCTION DETECTION
-# ============================================================
-
-def check_python_long_functions(file):
-    findings = []
-    content = read_file(file)
-
-    if not content:
-        return findings
-
-    try:
-        tree = ast.parse(content)
-    except SyntaxError:
-        return findings
-
-    for node in ast.walk(tree):
-        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            continue
-
-        if not hasattr(node, "end_lineno"):
-            continue
-
-        length = node.end_lineno - node.lineno + 1
-
-        if length > MAX_FUNCTION_LINES:
-            findings.append({
-                "type": "Long Function",
-                "file": str(file),
-                "function": node.name,
-                "line": node.lineno,
-                "details": f"{length} lines",
-                "severity": "MEDIUM",
-            })
-
-    return findings
-
-
-# ============================================================
-# JAVASCRIPT HELPERS
-# ============================================================
-
-def strip_js_strings_and_comments(content):
-    """Reduce false positives while preserving line structure."""
-    pattern = re.compile(
-        r"//[^\n]*|/\*[\s\S]*?\*/|(?:'[^'\\]*(?:\\.[^'\\]*)*'|\"[^\"\\]*(?:\\.[^\"\\]*)*\"|`[^`\\]*(?:\\.[^`\\]*)*`)",
-        re.MULTILINE,
-    )
-    return pattern.sub(lambda match: "\n" * match.group(0).count("\n"), content)
-
-
-def find_matching_brace(text, opening_index):
-    depth = 0
-    in_string = None
-    escape = False
-
-    for index in range(opening_index, len(text)):
-        char = text[index]
-
-        if in_string:
-            if escape:
-                escape = False
-            elif char == "\\":
-                escape = True
-            elif char == in_string:
-                in_string = None
-            continue
-
-        if char in "'\"`":
-            in_string = char
-        elif char == "{":
-            depth += 1
-        elif char == "}":
-            depth -= 1
-            if depth == 0:
-                return index
-
-    return None
-
-
-def estimate_js_complexity(function_text):
-    """Approximate cyclomatic complexity for JavaScript/TypeScript."""
-    cleaned = strip_js_strings_and_comments(function_text)
-    complexity = 1
-
-    complexity += len(re.findall(r"\bif\s*\(", cleaned))
-    complexity += len(re.findall(r"\belse\s+if\b", cleaned))
-    complexity += len(re.findall(r"\bfor\s*\(", cleaned))
-    complexity += len(re.findall(r"\bwhile\s*\(", cleaned))
-    complexity += len(re.findall(r"\bcatch\s*\(", cleaned))
-    complexity += len(re.findall(r"\bswitch\s*\(", cleaned))
-    complexity += len(re.findall(r"\bcase\s+", cleaned))
-    complexity += len(re.findall(r"\?\s*[^.?]", cleaned))
-    complexity += len(re.findall(r"&&|\|\|", cleaned))
-
-    return complexity
-
-
-def check_js_functions(file):
-    findings = []
-    content = read_file(file)
-
-    if not content:
-        return findings
-
-    cleaned = strip_js_strings_and_comments(content)
-
-    # Named functions, arrow functions, and React components.
-    patterns = [
-        re.compile(r"\b(?:async\s+)?function\s+([A-Za-z_$][\w$]*)\s*\([^)]*\)\s*\{"),
-        re.compile(r"\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?(?:\([^)]*\)|[A-Za-z_$][\w$]*)\s*=>\s*\{"),
-    ]
-
-    lines = content.splitlines()
-
-    for pattern in patterns:
-        for match in pattern.finditer(cleaned):
-            opening = cleaned.find("{", match.start(), match.end())
-            if opening == -1:
-                continue
-
-            closing = find_matching_brace(cleaned, opening)
-            if closing is None:
-                continue
-
-            start_line = cleaned.count("\n", 0, match.start()) + 1
-            end_line = cleaned.count("\n", 0, closing) + 1
-            length = end_line - start_line + 1
-
-            if length <= MAX_JS_FUNCTION_LINES:
-                continue
-
-            name = match.group(1)
-            findings.append({
-                "type": "Long JavaScript Function",
-                "file": str(file),
-                "function": name,
-                "line": start_line,
-                "details": f"{length} lines",
-                "severity": "MEDIUM",
-            })
-
-    return findings
-
-
-# ============================================================
-# LONG FUNCTION DETECTION
+# PYTHON LONG FUNCTIONS
 # ============================================================
 
 def check_long_functions(files):
+
     findings = []
 
     for file in files:
-        extension = file.suffix.lower()
 
-        if extension == ".py":
-            findings.extend(check_python_long_functions(file))
-        elif extension in JS_EXTENSIONS:
-            findings.extend(check_js_functions(file))
-
-    return findings
-
-
-# ============================================================
-# PYTHON COMPLEXITY
-# ============================================================
-
-def calculate_function_complexity(function_node):
-    complexity = 1
-
-    for node in ast.walk(function_node):
-        if isinstance(node, (
-            ast.If, ast.For, ast.While, ast.AsyncFor,
-            ast.ExceptHandler, ast.With, ast.AsyncWith, ast.Assert
-        )):
-            complexity += 1
-        elif isinstance(node, ast.BoolOp):
-            complexity += len(node.values) - 1
-        elif isinstance(node, ast.IfExp):
-            complexity += 1
-
-    return complexity
-
-
-def analyze_python_complexity(files):
-    findings = []
-
-    for file in files:
         if file.suffix.lower() != ".py":
             continue
 
         content = read_file(file)
+
         if not content:
             continue
 
@@ -311,28 +161,287 @@ def analyze_python_complexity(files):
             continue
 
         for node in ast.walk(tree):
-            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                continue
 
-            complexity = calculate_function_complexity(node)
+            if isinstance(
+                node,
+                (
+                    ast.FunctionDef,
+                    ast.AsyncFunctionDef
+                )
+            ):
 
-            if complexity >= 10:
+                start = node.lineno
+
+                end = getattr(
+                    node,
+                    "end_lineno",
+                    start
+                )
+
+                length = end - start + 1
+
+                if length > MAX_FUNCTION_LINES:
+
+                    findings.append({
+                        "type": "Long Function",
+                        "file": str(file),
+                        "function": node.name,
+                        "line": start,
+                        "details": f"{length} lines",
+                        "severity": "MEDIUM",
+
+                        "why": (
+                            "Long functions often handle "
+                            "multiple responsibilities."
+                        ),
+
+                        "recommendation": (
+                            "Break the function into smaller "
+                            "single-purpose helper functions."
+                        ),
+
+                        "priority": "MEDIUM"
+                    })
+
+    return findings
+
+
+# ============================================================
+# PYTHON COMPLEXITY
+# ============================================================
+
+def calculate_function_complexity(function_node):
+
+    complexity = 1
+
+    for node in ast.walk(function_node):
+
+        if isinstance(
+            node,
+            (
+                ast.If,
+                ast.For,
+                ast.While,
+                ast.AsyncFor,
+                ast.ExceptHandler,
+                ast.With,
+                ast.AsyncWith
+            )
+        ):
+
+            complexity += 1
+
+        elif isinstance(node, ast.BoolOp):
+
+            complexity += len(node.values) - 1
+
+    return complexity
+
+
+def analyze_python_complexity(files):
+
+    findings = []
+
+    for file in files:
+
+        if file.suffix.lower() != ".py":
+            continue
+
+        content = read_file(file)
+
+        if not content:
+            continue
+
+        try:
+            tree = ast.parse(content)
+        except SyntaxError:
+            continue
+
+        for node in ast.walk(tree):
+
+            if isinstance(
+                node,
+                (
+                    ast.FunctionDef,
+                    ast.AsyncFunctionDef
+                )
+            ):
+
+                complexity = calculate_function_complexity(
+                    node
+                )
+
+                if complexity >= 10:
+
+                    findings.append({
+                        "type": "High Complexity",
+                        "file": str(file),
+                        "function": node.name,
+                        "line": node.lineno,
+                        "details": (
+                            f"Complexity: {complexity}"
+                        ),
+                        "severity": "HIGH",
+
+                        "why": (
+                            "Many decision paths make the "
+                            "function harder to test and maintain."
+                        ),
+
+                        "recommendation": (
+                            "Split complex logic into smaller "
+                            "functions and simplify conditions."
+                        ),
+
+                        "priority": "HIGH"
+                    })
+
+                elif complexity >= 6:
+
+                    findings.append({
+                        "type": "Moderate Complexity",
+                        "file": str(file),
+                        "function": node.name,
+                        "line": node.lineno,
+                        "details": (
+                            f"Complexity: {complexity}"
+                        ),
+                        "severity": "MEDIUM",
+
+                        "why": (
+                            "The function contains several "
+                            "decision paths."
+                        ),
+
+                        "recommendation": (
+                            "Consider extracting conditional "
+                            "logic into helper functions."
+                        ),
+
+                        "priority": "MEDIUM"
+                    })
+
+    return findings
+
+
+# ============================================================
+# JAVASCRIPT FUNCTION DETECTION
+# ============================================================
+
+def _find_js_functions(content):
+
+    functions = []
+
+    patterns = [
+
+        # function name() {}
+        re.compile(
+            r"\bfunction\s+([A-Za-z_$][\w$]*)\s*\("
+        ),
+
+        # const name = (...) =>
+        re.compile(
+            r"\b(?:const|let|var)\s+"
+            r"([A-Za-z_$][\w$]*)\s*="
+            r"\s*(?:async\s*)?"
+            r"(?:\([^)]*\)|[A-Za-z_$][\w$]*)\s*=>"
+        )
+    ]
+
+    for pattern in patterns:
+
+        for match in pattern.finditer(content):
+
+            name = match.group(1)
+
+            line = (
+                content[:match.start()].count("\n")
+                + 1
+            )
+
+            functions.append({
+                "name": name,
+                "line": line
+            })
+
+    unique = {}
+
+    for function in functions:
+
+        key = (
+            function["name"],
+            function["line"]
+        )
+
+        unique[key] = function
+
+    return sorted(
+        unique.values(),
+        key=lambda item: item["line"]
+    )
+
+
+# ============================================================
+# JAVASCRIPT FUNCTION LENGTH
+# ============================================================
+
+def check_long_javascript_functions(files):
+
+    findings = []
+
+    for file in files:
+
+        if file.suffix.lower() not in JS_EXTENSIONS:
+            continue
+
+        content = read_file(file)
+
+        if not content:
+            continue
+
+        lines = content.splitlines()
+
+        functions = _find_js_functions(content)
+
+        for index, function in enumerate(functions):
+
+            start_line = function["line"]
+
+            if index + 1 < len(functions):
+
+                next_start = functions[index + 1]["line"]
+
+                length = next_start - start_line
+
+            else:
+
+                length = (
+                    len(lines)
+                    - start_line
+                    + 1
+                )
+
+            if length > MAX_JS_FUNCTION_LINES:
+
                 findings.append({
-                    "type": "High Complexity",
+                    "type": "Long JavaScript Function",
                     "file": str(file),
-                    "function": node.name,
-                    "line": node.lineno,
-                    "details": f"Complexity: {complexity}",
-                    "severity": "HIGH",
-                })
-            elif complexity >= 6:
-                findings.append({
-                    "type": "Moderate Complexity",
-                    "file": str(file),
-                    "function": node.name,
-                    "line": node.lineno,
-                    "details": f"Complexity: {complexity}",
+                    "function": function["name"],
+                    "line": start_line,
+                    "details": f"{length} lines",
                     "severity": "MEDIUM",
+
+                    "why": (
+                        "Large JavaScript functions often "
+                        "contain multiple responsibilities."
+                    ),
+
+                    "recommendation": (
+                        "Extract reusable logic into smaller "
+                        "helper functions or components."
+                    ),
+
+                    "priority": "MEDIUM"
                 })
 
     return findings
@@ -342,54 +451,159 @@ def analyze_python_complexity(files):
 # JAVASCRIPT COMPLEXITY
 # ============================================================
 
-def analyze_javascript_complexity(files):
+def calculate_javascript_complexity(content):
+
+    complexity = 1
+
+    complexity += len(
+        re.findall(
+            r"\bif\s*\(",
+            content
+        )
+    )
+
+    complexity += len(
+        re.findall(
+            r"\belse\s+if\s*\(",
+            content
+        )
+    )
+
+    complexity += len(
+        re.findall(
+            r"\bfor\s*\(",
+            content
+        )
+    )
+
+    complexity += len(
+        re.findall(
+            r"\bwhile\s*\(",
+            content
+        )
+    )
+
+    complexity += len(
+        re.findall(
+            r"\bswitch\s*\(",
+            content
+        )
+    )
+
+    complexity += len(
+        re.findall(
+            r"\?",
+            content
+        )
+    )
+
+    complexity += len(
+        re.findall(
+            r"&&|\|\|",
+            content
+        )
+    )
+
+    return complexity
+
+
+def analyze_javascript_quality(files):
+
     findings = []
 
     for file in files:
+
         if file.suffix.lower() not in JS_EXTENSIONS:
             continue
 
         content = read_file(file)
+
         if not content:
             continue
 
-        cleaned = strip_js_strings_and_comments(content)
+        # ----------------------------------------------------
+        # Function length
+        # ----------------------------------------------------
 
-        patterns = [
-            re.compile(r"\b(?:async\s+)?function\s+([A-Za-z_$][\w$]*)\s*\([^)]*\)\s*\{"),
-            re.compile(r"\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?(?:\([^)]*\)|[A-Za-z_$][\w$]*)\s*=>\s*\{"),
-        ]
+        findings.extend(
+            check_long_javascript_functions(
+                [file]
+            )
+        )
 
-        for pattern in patterns:
-            for match in pattern.finditer(cleaned):
-                opening = cleaned.find("{", match.start(), match.end())
-                if opening == -1:
-                    continue
+        # ----------------------------------------------------
+        # Complexity
+        # ----------------------------------------------------
 
-                closing = find_matching_brace(cleaned, opening)
-                if closing is None:
-                    continue
+        complexity = calculate_javascript_complexity(
+            content
+        )
 
-                function_text = cleaned[match.start():closing + 1]
-                complexity = estimate_js_complexity(function_text)
-                line = cleaned.count("\n", 0, match.start()) + 1
+        functions = _find_js_functions(content)
 
-                if complexity >= 20:
-                    severity = "HIGH"
-                    finding_type = "High JavaScript Complexity"
-                elif complexity >= 10:
-                    severity = "MEDIUM"
-                    finding_type = "Moderate JavaScript Complexity"
-                else:
-                    continue
+        function_name = (
+            functions[0]["name"]
+            if functions
+            else "Module"
+        )
 
-                findings.append({
-                    "type": finding_type,
-                    "file": str(file),
-                    "function": match.group(1),
-                    "line": line,
-                    "details": f"Estimated complexity: {complexity}",
-                    "severity": severity,
-                })
+        function_line = (
+            functions[0]["line"]
+            if functions
+            else 1
+        )
+
+        if complexity >= 20:
+
+            findings.append({
+                "type": "High JavaScript Complexity",
+                "file": str(file),
+                "function": function_name,
+                "line": function_line,
+                "details": (
+                    f"Estimated complexity: "
+                    f"{complexity}"
+                ),
+                "severity": "HIGH",
+
+                "why": (
+                    "High branching and conditional logic "
+                    "creates many possible execution paths."
+                ),
+
+                "recommendation": (
+                    "Split the component into smaller "
+                    "components and move business logic "
+                    "into dedicated helper modules."
+                ),
+
+                "priority": "HIGH"
+            })
+
+        elif complexity >= 10:
+
+            findings.append({
+                "type": "Moderate JavaScript Complexity",
+                "file": str(file),
+                "function": function_name,
+                "line": function_line,
+                "details": (
+                    f"Estimated complexity: "
+                    f"{complexity}"
+                ),
+                "severity": "MEDIUM",
+
+                "why": (
+                    "The file contains several conditional "
+                    "execution paths."
+                ),
+
+                "recommendation": (
+                    "Consider simplifying conditions or "
+                    "extracting complex logic."
+                ),
+
+                "priority": "MEDIUM"
+            })
 
     return findings

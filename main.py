@@ -1,16 +1,11 @@
-from scanner.vulnerabilities import (
-    check_vulnerabilities_batch
-)
+from scanner.vulnerabilities import check_vulnerabilities_batch
 
-from scanner.git_analysis import (
-    analyze_git_repository
-)
+from scanner.git_analysis import analyze_git_repository
 
 from scanner.dependencies import (
     find_dependency_files,
     parse_requirements,
-    parse_package_json,
-    check_outdated_dependencies
+    parse_package_json
 )
 
 from scanner.health import (
@@ -24,7 +19,8 @@ from scanner.quality import (
     check_large_files,
     check_todos,
     check_long_functions,
-    analyze_python_complexity
+    analyze_python_complexity,
+    analyze_javascript_quality
 )
 
 from scanner.files import (
@@ -33,75 +29,52 @@ from scanner.files import (
     count_lines
 )
 
-from scanner.security import (
-    scan_for_secrets
-)
+from scanner.security import scan_for_secrets
 
 
 # ============================================================
 # REPOSITORY INPUT
 # ============================================================
 
-repo_path = input(
-    "Enter repository path: "
-).strip()
-
+repo_path = input("Enter repository path: ").strip()
 
 if not repo_path:
-
-    print(
-        "❌ Repository path cannot be empty."
-    )
-
+    print("❌ Repository path cannot be empty.")
     exit()
 
-
-print(
-    "\n🔎 Scanning repository...\n"
-)
+print("\n🔎 Scanning repository...\n")
 
 
 # ============================================================
 # GIT ANALYSIS
 # ============================================================
 
-git_info = analyze_git_repository(
-    repo_path
-)
+git_info = analyze_git_repository(repo_path)
 
 
 # ============================================================
 # BASIC REPOSITORY SCAN
 # ============================================================
 
-files = scan_files(
-    repo_path
-)
+files = scan_files(repo_path)
 
-languages = detect_languages(
-    files
-)
+languages = detect_languages(files)
 
-lines = count_lines(
-    files
-)
+lines = count_lines(files)
 
 
 # ============================================================
 # SECURITY SCAN
 # ============================================================
 
-security_findings = (
-    scan_for_secrets(files)
-)
+security_findings = scan_for_secrets(files)
 
 
 # ============================================================
-# CODE QUALITY
+# CODE QUALITY SCAN
 # ============================================================
 
 quality_findings = []
-
 
 quality_findings.extend(
     check_large_files(files)
@@ -119,87 +92,64 @@ quality_findings.extend(
     analyze_python_complexity(files)
 )
 
-
-# ============================================================
-# DEPENDENCIES
-# ============================================================
-
-dependency_files = (
-    find_dependency_files(
-        repo_path
-    )
+quality_findings.extend(
+    analyze_javascript_quality(files)
 )
 
+
+# ============================================================
+# DEPENDENCY SCAN
+# ============================================================
+
+dependency_files = find_dependency_files(repo_path)
 
 dependency_findings = []
 
 dependency_results = []
 
-outdated_results = []
-
-
 dependency_groups = {
-
     "PyPI": [],
-
     "npm": []
-
 }
 
 
 # ============================================================
-# COLLECT DEPENDENCIES
+# COLLECT DIRECT DEPENDENCIES
 # ============================================================
 
 for file in dependency_files:
 
     filename = file.name.lower()
 
-
     # --------------------------------------------------------
-    # PYTHON
+    # Python
     # --------------------------------------------------------
 
     if filename == "requirements.txt":
 
-        dependencies = (
-            parse_requirements(file)
-        )
-
+        dependencies = parse_requirements(file)
 
         for dependency in dependencies:
 
-            dependency["_file"] = (
-                file.name
-            )
+            dependency["_file"] = file.name
 
-            dependency_groups[
-                "PyPI"
-            ].append(
+            dependency_groups["PyPI"].append(
                 dependency
             )
 
-
     # --------------------------------------------------------
-    # NODE
+    # Node.js
     # --------------------------------------------------------
 
     elif filename == "package.json":
 
-        dependencies = (
-            parse_package_json(file)
-        )
-
+        dependencies = parse_package_json(file)
 
         for dependency in dependencies:
 
-            dependency["_file"] = (
-                file.name
-            )
+            dependency["_file"] = file.name
 
-            dependency_groups[
-                "npm"
-            ].append(
+            dependency_groups["npm"].append(
                 dependency
             )
 
@@ -221,12 +171,9 @@ if dependency_groups["PyPI"]:
         f"Python dependencies..."
     )
 
-
-    python_vulnerabilities = (
-        check_vulnerabilities_batch(
-            dependency_groups["PyPI"],
-            ecosystem="PyPI"
-        )
+    python_vulnerabilities = check_vulnerabilities_batch(
+        dependency_groups["PyPI"],
+        "PyPI"
     )
 
 
@@ -238,138 +185,66 @@ if dependency_groups["npm"]:
         f"npm dependencies..."
     )
 
-
-    npm_vulnerabilities = (
-        check_vulnerabilities_batch(
-            dependency_groups["npm"],
-            ecosystem="npm"
-        )
+    npm_vulnerabilities = check_vulnerabilities_batch(
+        dependency_groups["npm"],
+        "npm"
     )
-
-
-# ============================================================
-# OUTDATED DEPENDENCY SCAN
-# ============================================================
-
-print(
-    "\n📦 Checking dependency versions..."
-)
-
-
-for ecosystem, dependencies in (
-    dependency_groups.items()
-):
-
-    if not dependencies:
-        continue
-
-
-    print(
-        f"   Checking {ecosystem}..."
-    )
-
-
-    results = (
-        check_outdated_dependencies(
-            dependencies,
-            ecosystem
-        )
-    )
-
-
-    for result in results:
-
-        result["ecosystem"] = (
-            ecosystem
-        )
-
-
-        outdated_results.append(
-            result
-        )
 
 
 # ============================================================
 # BUILD DEPENDENCY RESULTS
 # ============================================================
 
-for ecosystem, dependencies in (
-    dependency_groups.items()
-):
+for ecosystem, dependencies in dependency_groups.items():
 
     if ecosystem == "PyPI":
 
-        vulnerability_map = (
-            python_vulnerabilities
-        )
+        vulnerability_map = python_vulnerabilities
 
     else:
 
-        vulnerability_map = (
-            npm_vulnerabilities
-        )
-
+        vulnerability_map = npm_vulnerabilities
 
     for dependency in dependencies:
 
-        name = dependency[
-            "name"
-        ]
+        name = dependency["name"]
 
-        version = dependency[
-            "version"
-        ]
+        version = dependency["version"]
 
-
-        vulnerabilities = (
-            vulnerability_map.get(
-                (name, version),
-                []
-            )
+        vulnerabilities = vulnerability_map.get(
+            (name, version),
+            []
         )
-
 
         dependency_results.append({
 
-            "file":
-                dependency["_file"],
+            "file": dependency["_file"],
 
-            "name":
-                name,
+            "name": name,
 
-            "version":
-                version,
+            "version": version,
 
-            "ecosystem":
-                ecosystem,
+            "ecosystem": ecosystem,
 
-            "vulnerabilities":
-                vulnerabilities
+            "vulnerabilities": vulnerabilities
 
         })
-
 
         if vulnerabilities:
 
             dependency_findings.append({
 
-                "type":
-                    "Vulnerable Dependency",
+                "type": "Vulnerable Dependency",
 
-                "package":
-                    name,
+                "package": name,
 
-                "version":
-                    version,
+                "version": version,
 
-                "count":
-                    len(vulnerabilities),
+                "count": len(vulnerabilities),
 
-                "severity":
-                    "HIGH",
+                "severity": "HIGH",
 
-                "confidence":
-                    100
+                "confidence": 100
 
             })
 
@@ -379,57 +254,43 @@ for ecosystem, dependencies in (
 # ============================================================
 
 all_security_findings = (
-    security_findings
-    + dependency_findings
+    security_findings +
+    dependency_findings
 )
 
 
 # ============================================================
-# HEALTH
+# HEALTH CALCULATION
 # ============================================================
 
-security_score = (
-    calculate_security_score(
-        all_security_findings
-    )
+security_score = calculate_security_score(
+    all_security_findings
 )
 
-
-quality_score = (
-    calculate_quality_score(
-        quality_findings
-    )
+quality_score = calculate_quality_score(
+    quality_findings
 )
 
-
-documentation_score = (
-    calculate_documentation_score(
-        files
-    )
+documentation_score = calculate_documentation_score(
+    files
 )
 
-
-overall_score = (
-    calculate_overall_score(
-        security_score,
-        quality_score,
-        documentation_score
-    )
+overall_score = calculate_overall_score(
+    security_score,
+    quality_score,
+    documentation_score
 )
 
 
 # ============================================================
-# HEADER
+# REPO DOCTOR HEADER
 # ============================================================
 
 print("\n")
 
-print(
-    "🩺 REPO DOCTOR"
-)
+print("🩺 REPO DOCTOR")
 
 print("=" * 40)
-
 
 print(
     f"Source files: {len(files)}"
@@ -444,12 +305,9 @@ print(
 # PROJECT DNA
 # ============================================================
 
-print(
-    "\n🧬 PROJECT DNA"
-)
+print("\n🧬 PROJECT DNA")
 
 print("-" * 40)
-
 
 if languages:
 
@@ -460,28 +318,23 @@ if languages:
     ):
 
         print(
-            f"{language:<18} "
-            f"{count} files"
+            f"{language:<18} {count} files"
         )
 
 else:
 
     print(
-        "No recognized programming "
-        "languages found."
+        "No recognized programming languages found."
     )
 
 
 # ============================================================
-# SECURITY
+# SECURITY SCAN
 # ============================================================
 
-print(
-    "\n🔐 SECURITY SCAN"
-)
+print("\n🔐 SECURITY SCAN")
 
 print("-" * 40)
-
 
 if security_findings:
 
@@ -490,43 +343,38 @@ if security_findings:
         f"{len(security_findings)}"
     )
 
-
     for finding in security_findings:
 
+        location = finding["file"]
+
+        if "line" in finding:
+
+            location += (
+                f" (line {finding['line']})"
+            )
+
         print(
-
             f"[{finding['severity']}] "
-
             f"{finding['type']} → "
-
-            f"{finding['file']} "
-
-            f"(line {finding['line']}) "
-
+            f"{location} "
             f"| Confidence: "
-
             f"{finding['confidence']}%"
-
         )
 
 else:
 
     print(
-        "✅ No obvious hardcoded "
-        "secrets detected."
+        "✅ No obvious hardcoded secrets detected."
     )
 
 
 # ============================================================
-# CODE QUALITY
+# CODE QUALITY + SMART DIAGNOSIS
 # ============================================================
 
-print(
-    "\n🧹 CODE QUALITY"
-)
+print("\n🧹 CODE QUALITY")
 
 print("-" * 40)
-
 
 if quality_findings:
 
@@ -535,54 +383,58 @@ if quality_findings:
         f"{len(quality_findings)}"
     )
 
-
     for finding in quality_findings:
 
-        location = finding[
-            "file"
-        ]
-
+        location = finding["file"]
 
         if "line" in finding:
 
             location += (
-                f" (line "
-                f"{finding['line']})"
+                f" (line {finding['line']})"
             )
 
-
         print(
-
-            f"[{finding['severity']}] "
-
+            f"\n[{finding['severity']}] "
             f"{finding['type']} → "
-
             f"{location}"
-
         )
-
 
         if "function" in finding:
 
             print(
-
                 f"    Function: "
-
                 f"{finding['function']}"
-
             )
-
 
         print(
             f"    {finding['details']}"
         )
 
+        if "why" in finding:
+
+            print(
+                f"    💡 Why: "
+                f"{finding['why']}"
+            )
+
+        if "recommendation" in finding:
+
+            print(
+                f"    🛠 Recommendation: "
+                f"{finding['recommendation']}"
+            )
+
+        if "priority" in finding:
+
+            print(
+                f"    📌 Priority: "
+                f"{finding['priority']}"
+            )
 
 else:
 
     print(
-        "✅ No basic quality "
-        "issues detected."
+        "✅ No basic quality issues detected."
     )
 
 
@@ -590,12 +442,9 @@ else:
 # DEPENDENCY ANALYSIS
 # ============================================================
 
-print(
-    "\n📦 DEPENDENCY ANALYSIS"
-)
+print("\n📦 DEPENDENCY ANALYSIS")
 
 print("-" * 40)
-
 
 if not dependency_files:
 
@@ -607,59 +456,51 @@ else:
 
     manifest_files = []
 
-
     for file in dependency_files:
 
         if file.name.lower() in {
-
             "requirements.txt",
-
             "package.json"
-
         }:
 
             if file not in manifest_files:
 
-                manifest_files.append(
-                    file
-                )
-
+                manifest_files.append(file)
 
     for file in manifest_files:
 
         file_results = [
 
             result
-
             for result in dependency_results
-
-            if result["file"]
-            == file.name
+            if result["file"] == file.name
 
         ]
-
 
         print(
             f"\n📄 {file.name}"
         )
-
 
         print(
             f"Direct dependencies: "
             f"{len(file_results)}"
         )
 
-
         vulnerable_results = [
 
             result
-
             for result in file_results
-
             if result["vulnerabilities"]
 
         ]
 
+        unspecified_results = [
+
+            result
+            for result in file_results
+            if result["version"] == "unspecified"
+
+        ]
 
         if vulnerable_results:
 
@@ -668,163 +509,76 @@ else:
                 f"{len(vulnerable_results)}"
             )
 
-
             for result in vulnerable_results:
 
                 print(
-
-                    f"  {result['name']} "
-
+                    f"\n  {result['name']} "
                     f"{result['version']}"
-
                 )
-
 
                 print(
-
                     f"    🚨 "
-
                     f"{len(result['vulnerabilities'])} "
-
                     f"known vulnerability(s)"
-
                 )
 
+                for vuln in result["vulnerabilities"]:
+
+                    print(
+                        f"    ID: "
+                        f"{vuln.get('id', 'Unknown')}"
+                    )
 
         else:
 
             print(
-                "  ✅ No known "
-                "vulnerabilities found"
+                "  ✅ No known vulnerabilities found"
             )
 
+        if unspecified_results:
 
-# ============================================================
-# OUTDATED DEPENDENCIES
-# ============================================================
-
-print(
-    "\n🔄 DEPENDENCY FRESHNESS"
-)
-
-print("-" * 40)
-
-
-if outdated_results:
-
-    print(
-        f"⚠️ Outdated packages: "
-        f"{len(outdated_results)}"
-    )
-
-
-    for result in outdated_results:
-
-        print(
-
-            f"\n  {result['name']}"
-
-        )
-
-
-        print(
-
-            f"    Current: "
-            f"{result['current']}"
-
-        )
-
-
-        print(
-
-            f"    Latest:  "
-            f"{result['latest']}"
-
-        )
-
-
-        print(
-
-            f"    Severity: "
-            f"{result['severity']}"
-
-        )
-
-else:
-
-    print(
-        "✅ All checked dependencies "
-        "are up to date."
-    )
+            print(
+                f"  ⚠️ Versions not specified: "
+                f"{len(unspecified_results)}"
+            )
 
 
 # ============================================================
 # DEPENDENCY SUMMARY
 # ============================================================
 
-print(
-    "\n📊 Dependency Summary"
-)
+print("\n📊 Dependency Summary")
 
 print("-" * 30)
-
 
 total_dependencies = len(
     dependency_results
 )
 
-
 vulnerable_packages = sum(
-
     1
-
     for result in dependency_results
-
     if result["vulnerabilities"]
-
 )
-
 
 total_vulnerabilities = sum(
-
-    len(
-        result["vulnerabilities"]
-    )
-
+    len(result["vulnerabilities"])
     for result in dependency_results
-
 )
 
-
 print(
-
     f"Dependencies analyzed: "
     f"{total_dependencies}"
-
 )
 
-
 print(
-
     f"Vulnerable packages: "
     f"{vulnerable_packages}"
-
 )
 
-
 print(
-
     f"Total vulnerabilities: "
     f"{total_vulnerabilities}"
-
-)
-
-
-print(
-
-    f"Outdated packages: "
-    f"{len(outdated_results)}"
-
 )
 
 
@@ -832,12 +586,9 @@ print(
 # GIT HEALTH
 # ============================================================
 
-print(
-    "\n📜 GIT HEALTH"
-)
+print("\n📜 GIT HEALTH")
 
 print("-" * 40)
-
 
 if git_info["is_git"]:
 
@@ -845,56 +596,35 @@ if git_info["is_git"]:
         "Git repository: YES"
     )
 
-
     print(
-
         f"Commits:        "
         f"{git_info['commits']}"
-
     )
 
-
     print(
-
         f"Contributors:   "
         f"{git_info['contributors']}"
-
     )
-
 
     print(
-
         f"Branches:       "
         f"{git_info['branches']}"
-
     )
 
-
-    last_commit = (
-        git_info["last_commit"]
-    )
-
+    last_commit = git_info["last_commit"]
 
     if last_commit:
 
-        print(
-            "\nLast commit:"
-        )
-
+        print("\nLast commit:")
 
         print(
-
             f"    {last_commit['hash']} "
             f"— {last_commit['message']}"
-
         )
 
-
         print(
-
             f"    Author: "
             f"{last_commit['author']}"
-
         )
 
 else:
@@ -908,55 +638,38 @@ else:
 # REPOSITORY HEALTH
 # ============================================================
 
-print(
-    "\n🩺 REPOSITORY HEALTH"
-)
+print("\n🩺 REPOSITORY HEALTH")
 
 print("=" * 40)
 
-
 print(
-
     f"Overall Health      "
     f"{overall_score}/100"
-
 )
 
-
 print(
-
     f"🔐 Security         "
     f"{security_score}/100"
-
 )
 
-
 print(
-
     f"🧹 Code Quality     "
     f"{quality_score}/100"
-
 )
 
-
 print(
-
     f"📚 Documentation    "
     f"{documentation_score}/100"
-
 )
 
 
 # ============================================================
-# FINAL DIAGNOSIS
+# FINAL STATUS
 # ============================================================
 
-print(
-    "\n🩺 DIAGNOSIS"
-)
+print("\n🩺 DIAGNOSIS")
 
 print("-" * 40)
-
 
 if overall_score >= 90:
 
@@ -979,6 +692,5 @@ elif overall_score >= 50:
 else:
 
     print(
-        "🔴 Critical repository health "
-        "issues detected."
+        "🔴 Critical repository health issues detected."
     )
