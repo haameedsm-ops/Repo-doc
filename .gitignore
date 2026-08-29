@@ -1,8 +1,11 @@
 __pycache__/
-*.pyc
+*.py[cod]
 *.pyo
-*.pyd
 .venv/
 venv/
+env/
 .env
-reports/*
+.pytest_cache/
+.coverage
+reports/*.json
+reports/*.html
