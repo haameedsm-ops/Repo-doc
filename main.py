@@ -30,6 +30,7 @@ from scanner.files import (
 )
 
 from scanner.security import scan_for_secrets
+from scanner.config import load_config
 
 
 # ============================================================
@@ -41,6 +42,8 @@ repo_path = input("Enter repository path: ").strip()
 if not repo_path:
     print("❌ Repository path cannot be empty.")
     exit()
+
+config = load_config(repo_path)
 
 print("\n🔎 Scanning repository...\n")
 
@@ -77,7 +80,10 @@ security_findings = scan_for_secrets(files)
 quality_findings = []
 
 quality_findings.extend(
-    check_large_files(files)
+    check_large_files(
+        files,
+        config
+    )
 )
 
 quality_findings.extend(
@@ -198,11 +204,8 @@ if dependency_groups["npm"]:
 for ecosystem, dependencies in dependency_groups.items():
 
     if ecosystem == "PyPI":
-
         vulnerability_map = python_vulnerabilities
-
     else:
-
         vulnerability_map = npm_vulnerabilities
 
     for dependency in dependencies:

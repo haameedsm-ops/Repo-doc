@@ -1,28 +1,15 @@
 import ast
-import re
 
 from tree_sitter import Parser
 import tree_sitter_javascript
 
-# ============================================================
-# LARGE FILE THRESHOLDS
-# ============================================================
 
-LARGE_FILE_THRESHOLDS = {
-    ".py": 500,
-    ".js": 800,
-    ".jsx": 800,
-    ".ts": 800,
-    ".tsx": 800,
-    ".css": 1200,
-    ".scss": 1200,
-    ".sass": 1200,
-    ".less": 1200,
-    ".html": 1000,
-    ".htm": 1000,
-}
+# ============================================================
+# DEFAULT LARGE FILE SETTINGS
+# ============================================================
 
 DEFAULT_MAX_FILE_LINES = 1000
+
 MAX_FUNCTION_LINES = 50
 MAX_JS_FUNCTION_LINES = 80
 
@@ -56,15 +43,27 @@ def read_file(file):
 # LARGE FILE CHECK
 # ============================================================
 
-def _get_file_line_threshold(file):
+def _get_file_line_threshold(
+    file,
+    config=None
+):
     """
-    Return the recommended maximum line count based on
-    the file type.
+    Return the configured maximum line count
+    based on the file type.
     """
+
+    if config is None:
+
+        config = {}
+
+    thresholds = config.get(
+        "large_file_thresholds",
+        {}
+    )
 
     extension = file.suffix.lower()
 
-    return LARGE_FILE_THRESHOLDS.get(
+    return thresholds.get(
         extension,
         DEFAULT_MAX_FILE_LINES
     )
@@ -78,17 +77,29 @@ def _get_file_type(file):
     extension = file.suffix.lower()
 
     file_types = {
+
         ".py": "Python",
+
         ".js": "JavaScript",
+
         ".jsx": "JavaScript JSX",
+
         ".ts": "TypeScript",
+
         ".tsx": "TypeScript JSX",
+
         ".css": "CSS",
+
         ".scss": "SCSS",
+
         ".sass": "Sass",
+
         ".less": "Less",
+
         ".html": "HTML",
+
         ".htm": "HTML",
+
     }
 
     return file_types.get(
@@ -97,28 +108,43 @@ def _get_file_type(file):
     )
 
 
-def _get_large_file_severity(line_count, threshold):
+def _get_large_file_severity(
+    line_count,
+    threshold
+):
     """
-    Determine severity based on how far the file exceeds
-    its recommended threshold.
+    Determine severity based on how far
+    the file exceeds its configured threshold.
     """
 
     ratio = line_count / threshold
 
     if ratio >= 4:
+
         return "HIGH"
 
     if ratio >= 2:
+
         return "MEDIUM"
 
     return "LOW"
 
 
-def check_large_files(files):
+def check_large_files(
+    files,
+    config=None
+):
 
     findings = []
 
+    if config is None:
+
+        config = {
+            "large_file_thresholds": {}
+        }
+
     binary_extensions = {
+
         ".png",
         ".jpg",
         ".jpeg",
@@ -126,11 +152,14 @@ def check_large_files(files):
         ".webp",
         ".ico",
         ".bmp",
+
         ".mp4",
         ".mp3",
+
         ".woff",
         ".woff2",
         ".ttf",
+
         ".zip",
         ".pdf"
     }
@@ -145,9 +174,14 @@ def check_large_files(files):
         if not content:
             continue
 
-        line_count = len(content.splitlines())
+        line_count = len(
+            content.splitlines()
+        )
 
-        threshold = _get_file_line_threshold(file)
+        threshold = _get_file_line_threshold(
+            file,
+            config
+        )
 
         if line_count <= threshold:
             continue
@@ -168,47 +202,59 @@ def check_large_files(files):
         if severity == "HIGH":
 
             recommendation = (
-                f"This {file_type} file is extremely large. "
-                "Split it into smaller focused modules, "
-                "components, or stylesheets."
+                f"This {file_type} file is extremely "
+                "large. Split it into smaller focused "
+                "modules, components, or stylesheets."
             )
 
         elif severity == "MEDIUM":
 
             recommendation = (
-                f"Consider splitting this {file_type} file "
-                "into smaller focused modules or components."
+                f"Consider splitting this {file_type} "
+                "file into smaller focused modules "
+                "or components."
             )
 
         else:
 
             recommendation = (
                 f"Consider gradually splitting this "
-                f"{file_type} file into smaller focused sections."
+                f"{file_type} file into smaller "
+                "focused sections."
             )
 
         findings.append({
+
             "type": "Large File",
+
             "file": str(file),
+
             "details": (
                 f"Type: {file_type} | "
                 f"Lines: {line_count} | "
                 f"Threshold: {threshold} | "
-                f"Over threshold: {percentage_over:.1f}%"
+                f"Over threshold: "
+                f"{percentage_over:.1f}%"
             ),
+
             "severity": severity,
+
             "why": (
                 f"This {file_type} file contains "
                 f"{line_count} lines, exceeding the "
-                f"recommended {threshold}-line threshold. "
-                "Large files are harder to navigate, "
-                "maintain, test and review."
+                f"recommended {threshold}-line "
+                "threshold. Large files are harder "
+                "to navigate, maintain, test and "
+                "review."
             ),
+
             "recommendation": recommendation,
+
             "priority": severity
         })
 
     return findings
+
 
 # ============================================================
 # TODO / FIXME CHECK
@@ -236,19 +282,29 @@ def check_todos(files):
             ):
 
                 findings.append({
+
                     "type": "TODO/FIXME",
+
                     "file": str(file),
+
                     "line": line_number,
+
                     "details": line.strip(),
+
                     "severity": "LOW",
+
                     "why": (
-                        "TODO/FIXME markers usually indicate "
-                        "unfinished or deferred work."
+                        "TODO/FIXME markers usually "
+                        "indicate unfinished or "
+                        "deferred work."
                     ),
+
                     "recommendation": (
-                        "Resolve the task, convert it into "
-                        "a tracked issue, or remove the marker."
+                        "Resolve the task, convert it "
+                        "into a tracked issue, or remove "
+                        "the marker."
                     ),
+
                     "priority": "LOW"
                 })
 
@@ -299,25 +355,38 @@ def check_long_functions(files):
                     start
                 )
 
-                length = end - start + 1
+                length = (
+                    end
+                    - start
+                    + 1
+                )
 
                 if length > MAX_FUNCTION_LINES:
 
                     findings.append({
+
                         "type": "Long Function",
+
                         "file": str(file),
+
                         "function": node.name,
+
                         "line": start,
+
                         "details": f"{length} lines",
+
                         "severity": "MEDIUM",
+
                         "why": (
                             "Long functions often handle "
                             "multiple responsibilities."
                         ),
+
                         "recommendation": (
                             "Break the function into smaller "
                             "single-purpose helper functions."
                         ),
+
                         "priority": "MEDIUM"
                     })
 
@@ -328,11 +397,15 @@ def check_long_functions(files):
 # PYTHON COMPLEXITY
 # ============================================================
 
-def calculate_function_complexity(function_node):
+def calculate_function_complexity(
+    function_node
+):
 
     complexity = 1
 
-    for node in ast.walk(function_node):
+    for node in ast.walk(
+        function_node
+    ):
 
         if isinstance(
             node,
@@ -349,9 +422,14 @@ def calculate_function_complexity(function_node):
 
             complexity += 1
 
-        elif isinstance(node, ast.BoolOp):
+        elif isinstance(
+            node,
+            ast.BoolOp
+        ):
 
-            complexity += len(node.values) - 1
+            complexity += (
+                len(node.values) - 1
+            )
 
     return complexity
 
@@ -388,51 +466,76 @@ def analyze_python_complexity(files):
                 )
             ):
 
-                complexity = calculate_function_complexity(
-                    node
+                complexity = (
+                    calculate_function_complexity(
+                        node
+                    )
                 )
 
                 if complexity >= 10:
 
                     findings.append({
+
                         "type": "High Complexity",
+
                         "file": str(file),
+
                         "function": node.name,
+
                         "line": node.lineno,
+
                         "details": (
-                            f"Complexity: {complexity}"
+                            f"Complexity: "
+                            f"{complexity}"
                         ),
+
                         "severity": "HIGH",
+
                         "why": (
-                            "Many decision paths make the "
-                            "function harder to test and maintain."
+                            "Many decision paths make "
+                            "the function harder to "
+                            "test and maintain."
                         ),
+
                         "recommendation": (
-                            "Split complex logic into smaller "
-                            "functions and simplify conditions."
+                            "Split complex logic into "
+                            "smaller functions and "
+                            "simplify conditions."
                         ),
+
                         "priority": "HIGH"
                     })
 
                 elif complexity >= 6:
 
                     findings.append({
+
                         "type": "Moderate Complexity",
+
                         "file": str(file),
+
                         "function": node.name,
+
                         "line": node.lineno,
+
                         "details": (
-                            f"Complexity: {complexity}"
+                            f"Complexity: "
+                            f"{complexity}"
                         ),
+
                         "severity": "MEDIUM",
+
                         "why": (
-                            "The function contains several "
-                            "decision paths."
+                            "The function contains "
+                            "several decision paths."
                         ),
+
                         "recommendation": (
-                            "Consider extracting conditional "
-                            "logic into helper functions."
+                            "Consider extracting "
+                            "conditional logic into "
+                            "helper functions."
                         ),
+
                         "priority": "MEDIUM"
                     })
 
@@ -458,7 +561,9 @@ def _create_javascript_parser():
 # TREE-SITTER FUNCTION DETECTION
 # ============================================================
 
-def _find_tree_sitter_functions(content):
+def _find_tree_sitter_functions(
+    content
+):
 
     parser = _create_javascript_parser()
 
@@ -467,14 +572,20 @@ def _find_tree_sitter_functions(content):
         errors="ignore"
     )
 
-    tree = parser.parse(source)
+    tree = parser.parse(
+        source
+    )
 
     functions = []
 
     function_node_types = {
+
         "function_declaration",
+
         "function",
+
         "arrow_function",
+
         "method_definition"
     }
 
@@ -488,7 +599,9 @@ def _find_tree_sitter_functions(content):
 
             walk(child)
 
-    walk(tree.root_node)
+    walk(
+        tree.root_node
+    )
 
     return tree, functions
 
@@ -497,7 +610,10 @@ def _find_tree_sitter_functions(content):
 # TREE-SITTER FUNCTION NAME
 # ============================================================
 
-def _get_function_name(node, source):
+def _get_function_name(
+    node,
+    source
+):
 
     parent = node.parent
 
@@ -507,8 +623,10 @@ def _get_function_name(node, source):
 
     if node.type == "function_declaration":
 
-        name_node = node.child_by_field_name(
-            "name"
+        name_node = (
+            node.child_by_field_name(
+                "name"
+            )
         )
 
         if name_node:
@@ -520,7 +638,6 @@ def _get_function_name(node, source):
                 "utf-8",
                 errors="ignore"
             )
-
 
     # --------------------------------------------------------
     # Arrow function / assigned function
@@ -533,8 +650,10 @@ def _get_function_name(node, source):
             "pair"
         }:
 
-            name_node = parent.child_by_field_name(
-                "name"
+            name_node = (
+                parent.child_by_field_name(
+                    "name"
+                )
             )
 
             if name_node:
@@ -547,15 +666,16 @@ def _get_function_name(node, source):
                     errors="ignore"
                 )
 
-
     # --------------------------------------------------------
     # Method definition
     # --------------------------------------------------------
 
     if node.type == "method_definition":
 
-        name_node = node.child_by_field_name(
-            "name"
+        name_node = (
+            node.child_by_field_name(
+                "name"
+            )
         )
 
         if name_node:
@@ -568,7 +688,6 @@ def _get_function_name(node, source):
                 errors="ignore"
             )
 
-
     return "Anonymous Function"
 
 
@@ -576,24 +695,37 @@ def _get_function_name(node, source):
 # TREE-SITTER COMPLEXITY
 # ============================================================
 
-def calculate_tree_sitter_complexity(node):
+def calculate_tree_sitter_complexity(
+    node
+):
 
     complexity = 1
 
     decision_nodes = {
+
         "if_statement",
+
         "for_statement",
+
         "for_in_statement",
+
         "while_statement",
+
         "do_statement",
+
         "switch_case",
+
         "catch_clause",
+
         "ternary_expression"
     }
 
     logical_nodes = {
+
         "&&",
+
         "||",
+
         "??"
     }
 
@@ -666,9 +798,13 @@ def analyze_javascript_quality(files):
                 source
             )
 
-            start_line = node.start_point[0] + 1
+            start_line = (
+                node.start_point[0] + 1
+            )
 
-            end_line = node.end_point[0] + 1
+            end_line = (
+                node.end_point[0] + 1
+            )
 
             length = (
                 end_line
@@ -683,21 +819,39 @@ def analyze_javascript_quality(files):
             if length > MAX_JS_FUNCTION_LINES:
 
                 findings.append({
-                    "type": "Long JavaScript Function",
-                    "file": str(file),
-                    "function": name,
-                    "line": start_line,
-                    "details": f"{length} lines",
-                    "severity": "MEDIUM",
+
+                    "type":
+                        "Long JavaScript Function",
+
+                    "file":
+                        str(file),
+
+                    "function":
+                        name,
+
+                    "line":
+                        start_line,
+
+                    "details":
+                        f"{length} lines",
+
+                    "severity":
+                        "MEDIUM",
+
                     "why": (
-                        "Large JavaScript functions often "
-                        "contain multiple responsibilities."
+                        "Large JavaScript functions "
+                        "often contain multiple "
+                        "responsibilities."
                     ),
+
                     "recommendation": (
-                        "Extract reusable logic into smaller "
-                        "helper functions or components."
+                        "Extract reusable logic into "
+                        "smaller helper functions or "
+                        "components."
                     ),
-                    "priority": "MEDIUM"
+
+                    "priority":
+                        "MEDIUM"
                 })
 
             # ------------------------------------------------
@@ -713,50 +867,81 @@ def analyze_javascript_quality(files):
             if complexity >= 20:
 
                 findings.append({
-                    "type": "High JavaScript Complexity",
-                    "file": str(file),
-                    "function": name,
-                    "line": start_line,
+
+                    "type":
+                        "High JavaScript Complexity",
+
+                    "file":
+                        str(file),
+
+                    "function":
+                        name,
+
+                    "line":
+                        start_line,
+
                     "details": (
-                        f"Estimated complexity: "
+                        "Estimated complexity: "
                         f"{complexity}"
                     ),
-                    "severity": "HIGH",
+
+                    "severity":
+                        "HIGH",
+
                     "why": (
-                        "High branching and conditional logic "
-                        "creates many possible execution paths."
+                        "High branching and "
+                        "conditional logic creates "
+                        "many possible execution paths."
                     ),
+
                     "recommendation": (
                         "Split the function into smaller "
-                        "functions, simplify conditions, and "
-                        "move business logic into dedicated "
-                        "helper modules."
+                        "functions, simplify conditions, "
+                        "and move business logic into "
+                        "dedicated helper modules."
                     ),
-                    "priority": "HIGH"
+
+                    "priority":
+                        "HIGH"
                 })
 
             elif complexity >= 10:
 
                 findings.append({
-                    "type": "Moderate JavaScript Complexity",
-                    "file": str(file),
-                    "function": name,
-                    "line": start_line,
+
+                    "type":
+                        "Moderate JavaScript Complexity",
+
+                    "file":
+                        str(file),
+
+                    "function":
+                        name,
+
+                    "line":
+                        start_line,
+
                     "details": (
-                        f"Estimated complexity: "
+                        "Estimated complexity: "
                         f"{complexity}"
                     ),
-                    "severity": "MEDIUM",
+
+                    "severity":
+                        "MEDIUM",
+
                     "why": (
                         "The function contains several "
                         "conditional execution paths."
                     ),
+
                     "recommendation": (
-                        "Consider simplifying conditions or "
-                        "extracting complex logic into helper "
-                        "functions."
+                        "Consider simplifying conditions "
+                        "or extracting complex logic into "
+                        "helper functions."
                     ),
-                    "priority": "MEDIUM"
+
+                    "priority":
+                        "MEDIUM"
                 })
 
     return findings
