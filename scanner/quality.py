@@ -1,6 +1,9 @@
 import ast
 import re
 
+from tree_sitter import Parser
+import tree_sitter_javascript
+
 
 MAX_FILE_LINES = 300
 MAX_FUNCTION_LINES = 50
@@ -19,12 +22,16 @@ JS_EXTENSIONS = {
 # ============================================================
 
 def read_file(file):
+
     try:
+
         return file.read_text(
             encoding="utf-8",
             errors="ignore"
         )
+
     except (PermissionError, OSError):
+
         return ""
 
 
@@ -72,17 +79,14 @@ def check_large_files(files):
                 "file": str(file),
                 "details": f"{line_count} lines",
                 "severity": "MEDIUM",
-
                 "why": (
                     "Large files are harder to navigate, "
                     "maintain and review."
                 ),
-
                 "recommendation": (
                     "Split the file into smaller, "
                     "focused modules or components."
                 ),
-
                 "priority": "MEDIUM"
             })
 
@@ -120,17 +124,14 @@ def check_todos(files):
                     "line": line_number,
                     "details": line.strip(),
                     "severity": "LOW",
-
                     "why": (
                         "TODO/FIXME markers usually indicate "
                         "unfinished or deferred work."
                     ),
-
                     "recommendation": (
                         "Resolve the task, convert it into "
                         "a tracked issue, or remove the marker."
                     ),
-
                     "priority": "LOW"
                 })
 
@@ -156,8 +157,11 @@ def check_long_functions(files):
             continue
 
         try:
+
             tree = ast.parse(content)
+
         except SyntaxError:
+
             continue
 
         for node in ast.walk(tree):
@@ -189,17 +193,14 @@ def check_long_functions(files):
                         "line": start,
                         "details": f"{length} lines",
                         "severity": "MEDIUM",
-
                         "why": (
                             "Long functions often handle "
                             "multiple responsibilities."
                         ),
-
                         "recommendation": (
                             "Break the function into smaller "
                             "single-purpose helper functions."
                         ),
-
                         "priority": "MEDIUM"
                     })
 
@@ -253,8 +254,11 @@ def analyze_python_complexity(files):
             continue
 
         try:
+
             tree = ast.parse(content)
+
         except SyntaxError:
+
             continue
 
         for node in ast.walk(tree):
@@ -282,17 +286,14 @@ def analyze_python_complexity(files):
                             f"Complexity: {complexity}"
                         ),
                         "severity": "HIGH",
-
                         "why": (
                             "Many decision paths make the "
                             "function harder to test and maintain."
                         ),
-
                         "recommendation": (
                             "Split complex logic into smaller "
                             "functions and simplify conditions."
                         ),
-
                         "priority": "HIGH"
                     })
 
@@ -307,17 +308,14 @@ def analyze_python_complexity(files):
                             f"Complexity: {complexity}"
                         ),
                         "severity": "MEDIUM",
-
                         "why": (
                             "The function contains several "
                             "decision paths."
                         ),
-
                         "recommendation": (
                             "Consider extracting conditional "
                             "logic into helper functions."
                         ),
-
                         "priority": "MEDIUM"
                     })
 
@@ -325,60 +323,184 @@ def analyze_python_complexity(files):
 
 
 # ============================================================
-# JAVASCRIPT FUNCTION DETECTION
+# TREE-SITTER JAVASCRIPT PARSER
 # ============================================================
 
-def _find_js_functions(content):
+def _create_javascript_parser():
+
+    parser = Parser()
+
+    parser.language = (
+        tree_sitter_javascript.language()
+    )
+
+    return parser
+
+
+# ============================================================
+# TREE-SITTER FUNCTION DETECTION
+# ============================================================
+
+def _find_tree_sitter_functions(content):
+
+    parser = _create_javascript_parser()
+
+    source = content.encode(
+        "utf-8",
+        errors="ignore"
+    )
+
+    tree = parser.parse(source)
 
     functions = []
 
-    patterns = [
+    function_node_types = {
+        "function_declaration",
+        "function",
+        "arrow_function",
+        "method_definition"
+    }
 
-        # function name() {}
-        re.compile(
-            r"\bfunction\s+([A-Za-z_$][\w$]*)\s*\("
-        ),
+    def walk(node):
 
-        # const name = (...) =>
-        re.compile(
-            r"\b(?:const|let|var)\s+"
-            r"([A-Za-z_$][\w$]*)\s*="
-            r"\s*(?:async\s*)?"
-            r"(?:\([^)]*\)|[A-Za-z_$][\w$]*)\s*=>"
+        if node.type in function_node_types:
+
+            functions.append(node)
+
+        for child in node.children:
+
+            walk(child)
+
+    walk(tree.root_node)
+
+    return tree, functions
+
+
+# ============================================================
+# TREE-SITTER FUNCTION NAME
+# ============================================================
+
+def _get_function_name(node, source):
+
+    parent = node.parent
+
+    # --------------------------------------------------------
+    # Named function declaration
+    # --------------------------------------------------------
+
+    if node.type == "function_declaration":
+
+        name_node = node.child_by_field_name(
+            "name"
         )
-    ]
 
-    for pattern in patterns:
+        if name_node:
 
-        for match in pattern.finditer(content):
-
-            name = match.group(1)
-
-            line = (
-                content[:match.start()].count("\n")
-                + 1
+            return source[
+                name_node.start_byte:
+                name_node.end_byte
+            ].decode(
+                "utf-8",
+                errors="ignore"
             )
 
-            functions.append({
-                "name": name,
-                "line": line
-            })
 
-    unique = {}
+    # --------------------------------------------------------
+    # Arrow function / assigned function
+    # --------------------------------------------------------
 
-    for function in functions:
+    if parent:
 
-        key = (
-            function["name"],
-            function["line"]
+        if parent.type in {
+            "variable_declarator",
+            "pair"
+        }:
+
+            name_node = parent.child_by_field_name(
+                "name"
+            )
+
+            if name_node:
+
+                return source[
+                    name_node.start_byte:
+                    name_node.end_byte
+                ].decode(
+                    "utf-8",
+                    errors="ignore"
+                )
+
+
+    # --------------------------------------------------------
+    # Method definition
+    # --------------------------------------------------------
+
+    if node.type == "method_definition":
+
+        name_node = node.child_by_field_name(
+            "name"
         )
 
-        unique[key] = function
+        if name_node:
 
-    return sorted(
-        unique.values(),
-        key=lambda item: item["line"]
-    )
+            return source[
+                name_node.start_byte:
+                name_node.end_byte
+            ].decode(
+                "utf-8",
+                errors="ignore"
+            )
+
+
+    return "Anonymous Function"
+
+
+# ============================================================
+# TREE-SITTER COMPLEXITY
+# ============================================================
+
+def calculate_tree_sitter_complexity(node):
+
+    complexity = 1
+
+    decision_nodes = {
+        "if_statement",
+        "for_statement",
+        "for_in_statement",
+        "while_statement",
+        "do_statement",
+        "switch_case",
+        "catch_clause",
+        "ternary_expression"
+    }
+
+    logical_nodes = {
+        "&&",
+        "||",
+        "??"
+    }
+
+    def walk(current):
+
+        nonlocal complexity
+
+        if current is not node:
+
+            if current.type in decision_nodes:
+
+                complexity += 1
+
+            elif current.type in logical_nodes:
+
+                complexity += 1
+
+        for child in current.children:
+
+            walk(child)
+
+    walk(node)
+
+    return complexity
 
 
 # ============================================================
@@ -399,48 +521,57 @@ def check_long_javascript_functions(files):
         if not content:
             continue
 
-        lines = content.splitlines()
+        source = content.encode(
+            "utf-8",
+            errors="ignore"
+        )
 
-        functions = _find_js_functions(content)
+        try:
 
-        for index, function in enumerate(functions):
-
-            start_line = function["line"]
-
-            if index + 1 < len(functions):
-
-                next_start = functions[index + 1]["line"]
-
-                length = next_start - start_line
-
-            else:
-
-                length = (
-                    len(lines)
-                    - start_line
-                    + 1
+            tree, functions = (
+                _find_tree_sitter_functions(
+                    content
                 )
+            )
+
+        except Exception:
+
+            continue
+
+        for node in functions:
+
+            start_line = node.start_point[0] + 1
+
+            end_line = node.end_point[0] + 1
+
+            length = (
+                end_line
+                - start_line
+                + 1
+            )
 
             if length > MAX_JS_FUNCTION_LINES:
+
+                name = _get_function_name(
+                    node,
+                    source
+                )
 
                 findings.append({
                     "type": "Long JavaScript Function",
                     "file": str(file),
-                    "function": function["name"],
+                    "function": name,
                     "line": start_line,
                     "details": f"{length} lines",
                     "severity": "MEDIUM",
-
                     "why": (
                         "Large JavaScript functions often "
                         "contain multiple responsibilities."
                     ),
-
                     "recommendation": (
                         "Extract reusable logic into smaller "
                         "helper functions or components."
                     ),
-
                     "priority": "MEDIUM"
                 })
 
@@ -448,64 +579,8 @@ def check_long_javascript_functions(files):
 
 
 # ============================================================
-# JAVASCRIPT COMPLEXITY
+# JAVASCRIPT COMPLEXITY ANALYSIS
 # ============================================================
-
-def calculate_javascript_complexity(content):
-
-    complexity = 1
-
-    complexity += len(
-        re.findall(
-            r"\bif\s*\(",
-            content
-        )
-    )
-
-    complexity += len(
-        re.findall(
-            r"\belse\s+if\s*\(",
-            content
-        )
-    )
-
-    complexity += len(
-        re.findall(
-            r"\bfor\s*\(",
-            content
-        )
-    )
-
-    complexity += len(
-        re.findall(
-            r"\bwhile\s*\(",
-            content
-        )
-    )
-
-    complexity += len(
-        re.findall(
-            r"\bswitch\s*\(",
-            content
-        )
-    )
-
-    complexity += len(
-        re.findall(
-            r"\?",
-            content
-        )
-    )
-
-    complexity += len(
-        re.findall(
-            r"&&|\|\|",
-            content
-        )
-    )
-
-    return complexity
-
 
 def analyze_javascript_quality(files):
 
@@ -521,89 +596,125 @@ def analyze_javascript_quality(files):
         if not content:
             continue
 
-        # ----------------------------------------------------
-        # Function length
-        # ----------------------------------------------------
+        source = content.encode(
+            "utf-8",
+            errors="ignore"
+        )
 
-        findings.extend(
-            check_long_javascript_functions(
-                [file]
+        try:
+
+            tree, functions = (
+                _find_tree_sitter_functions(
+                    content
+                )
             )
-        )
+
+        except Exception:
+
+            continue
 
         # ----------------------------------------------------
-        # Complexity
+        # Function-level analysis
         # ----------------------------------------------------
 
-        complexity = calculate_javascript_complexity(
-            content
-        )
+        for node in functions:
 
-        functions = _find_js_functions(content)
+            name = _get_function_name(
+                node,
+                source
+            )
 
-        function_name = (
-            functions[0]["name"]
-            if functions
-            else "Module"
-        )
+            start_line = node.start_point[0] + 1
 
-        function_line = (
-            functions[0]["line"]
-            if functions
-            else 1
-        )
+            end_line = node.end_point[0] + 1
 
-        if complexity >= 20:
+            length = (
+                end_line
+                - start_line
+                + 1
+            )
 
-            findings.append({
-                "type": "High JavaScript Complexity",
-                "file": str(file),
-                "function": function_name,
-                "line": function_line,
-                "details": (
-                    f"Estimated complexity: "
-                    f"{complexity}"
-                ),
-                "severity": "HIGH",
+            # ------------------------------------------------
+            # Function length
+            # ------------------------------------------------
 
-                "why": (
-                    "High branching and conditional logic "
-                    "creates many possible execution paths."
-                ),
+            if length > MAX_JS_FUNCTION_LINES:
 
-                "recommendation": (
-                    "Split the component into smaller "
-                    "components and move business logic "
-                    "into dedicated helper modules."
-                ),
+                findings.append({
+                    "type": "Long JavaScript Function",
+                    "file": str(file),
+                    "function": name,
+                    "line": start_line,
+                    "details": f"{length} lines",
+                    "severity": "MEDIUM",
+                    "why": (
+                        "Large JavaScript functions often "
+                        "contain multiple responsibilities."
+                    ),
+                    "recommendation": (
+                        "Extract reusable logic into smaller "
+                        "helper functions or components."
+                    ),
+                    "priority": "MEDIUM"
+                })
 
-                "priority": "HIGH"
-            })
+            # ------------------------------------------------
+            # Complexity
+            # ------------------------------------------------
 
-        elif complexity >= 10:
+            complexity = (
+                calculate_tree_sitter_complexity(
+                    node
+                )
+            )
 
-            findings.append({
-                "type": "Moderate JavaScript Complexity",
-                "file": str(file),
-                "function": function_name,
-                "line": function_line,
-                "details": (
-                    f"Estimated complexity: "
-                    f"{complexity}"
-                ),
-                "severity": "MEDIUM",
+            if complexity >= 20:
 
-                "why": (
-                    "The file contains several conditional "
-                    "execution paths."
-                ),
+                findings.append({
+                    "type": "High JavaScript Complexity",
+                    "file": str(file),
+                    "function": name,
+                    "line": start_line,
+                    "details": (
+                        f"Estimated complexity: "
+                        f"{complexity}"
+                    ),
+                    "severity": "HIGH",
+                    "why": (
+                        "High branching and conditional logic "
+                        "creates many possible execution paths."
+                    ),
+                    "recommendation": (
+                        "Split the function into smaller "
+                        "functions, simplify conditions, and "
+                        "move business logic into dedicated "
+                        "helper modules."
+                    ),
+                    "priority": "HIGH"
+                })
 
-                "recommendation": (
-                    "Consider simplifying conditions or "
-                    "extracting complex logic."
-                ),
+            elif complexity >= 10:
 
-                "priority": "MEDIUM"
-            })
+                findings.append({
+                    "type": "Moderate JavaScript Complexity",
+                    "file": str(file),
+                    "function": name,
+                    "line": start_line,
+                    "details": (
+                        f"Estimated complexity: "
+                        f"{complexity}"
+                    ),
+                    "severity": "MEDIUM",
+                    "why": (
+                        "The function contains several "
+                        "conditional execution paths."
+                    ),
+                    "recommendation": (
+                        "Consider simplifying conditions or "
+                        "extracting complex logic into helper "
+                        "functions."
+                    ),
+                    "priority": "MEDIUM"
+                })
 
     return findings
