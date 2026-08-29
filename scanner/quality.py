@@ -4,8 +4,25 @@ import re
 from tree_sitter import Parser
 import tree_sitter_javascript
 
+# ============================================================
+# LARGE FILE THRESHOLDS
+# ============================================================
 
-MAX_FILE_LINES = 300
+LARGE_FILE_THRESHOLDS = {
+    ".py": 500,
+    ".js": 800,
+    ".jsx": 800,
+    ".ts": 800,
+    ".tsx": 800,
+    ".css": 1200,
+    ".scss": 1200,
+    ".sass": 1200,
+    ".less": 1200,
+    ".html": 1000,
+    ".htm": 1000,
+}
+
+DEFAULT_MAX_FILE_LINES = 1000
 MAX_FUNCTION_LINES = 50
 MAX_JS_FUNCTION_LINES = 80
 
@@ -38,6 +55,64 @@ def read_file(file):
 # ============================================================
 # LARGE FILE CHECK
 # ============================================================
+
+def _get_file_line_threshold(file):
+    """
+    Return the recommended maximum line count based on
+    the file type.
+    """
+
+    extension = file.suffix.lower()
+
+    return LARGE_FILE_THRESHOLDS.get(
+        extension,
+        DEFAULT_MAX_FILE_LINES
+    )
+
+
+def _get_file_type(file):
+    """
+    Return a human-readable file type.
+    """
+
+    extension = file.suffix.lower()
+
+    file_types = {
+        ".py": "Python",
+        ".js": "JavaScript",
+        ".jsx": "JavaScript JSX",
+        ".ts": "TypeScript",
+        ".tsx": "TypeScript JSX",
+        ".css": "CSS",
+        ".scss": "SCSS",
+        ".sass": "Sass",
+        ".less": "Less",
+        ".html": "HTML",
+        ".htm": "HTML",
+    }
+
+    return file_types.get(
+        extension,
+        extension.lstrip(".").upper() or "Unknown"
+    )
+
+
+def _get_large_file_severity(line_count, threshold):
+    """
+    Determine severity based on how far the file exceeds
+    its recommended threshold.
+    """
+
+    ratio = line_count / threshold
+
+    if ratio >= 4:
+        return "HIGH"
+
+    if ratio >= 2:
+        return "MEDIUM"
+
+    return "LOW"
+
 
 def check_large_files(files):
 
@@ -72,26 +147,68 @@ def check_large_files(files):
 
         line_count = len(content.splitlines())
 
-        if line_count > MAX_FILE_LINES:
+        threshold = _get_file_line_threshold(file)
 
-            findings.append({
-                "type": "Large File",
-                "file": str(file),
-                "details": f"{line_count} lines",
-                "severity": "MEDIUM",
-                "why": (
-                    "Large files are harder to navigate, "
-                    "maintain and review."
-                ),
-                "recommendation": (
-                    "Split the file into smaller, "
-                    "focused modules or components."
-                ),
-                "priority": "MEDIUM"
-            })
+        if line_count <= threshold:
+            continue
+
+        file_type = _get_file_type(file)
+
+        percentage_over = (
+            (line_count - threshold)
+            / threshold
+            * 100
+        )
+
+        severity = _get_large_file_severity(
+            line_count,
+            threshold
+        )
+
+        if severity == "HIGH":
+
+            recommendation = (
+                f"This {file_type} file is extremely large. "
+                "Split it into smaller focused modules, "
+                "components, or stylesheets."
+            )
+
+        elif severity == "MEDIUM":
+
+            recommendation = (
+                f"Consider splitting this {file_type} file "
+                "into smaller focused modules or components."
+            )
+
+        else:
+
+            recommendation = (
+                f"Consider gradually splitting this "
+                f"{file_type} file into smaller focused sections."
+            )
+
+        findings.append({
+            "type": "Large File",
+            "file": str(file),
+            "details": (
+                f"Type: {file_type} | "
+                f"Lines: {line_count} | "
+                f"Threshold: {threshold} | "
+                f"Over threshold: {percentage_over:.1f}%"
+            ),
+            "severity": severity,
+            "why": (
+                f"This {file_type} file contains "
+                f"{line_count} lines, exceeding the "
+                f"recommended {threshold}-line threshold. "
+                "Large files are harder to navigate, "
+                "maintain, test and review."
+            ),
+            "recommendation": recommendation,
+            "priority": severity
+        })
 
     return findings
-
 
 # ============================================================
 # TODO / FIXME CHECK
@@ -501,81 +618,6 @@ def calculate_tree_sitter_complexity(node):
     walk(node)
 
     return complexity
-
-
-# ============================================================
-# JAVASCRIPT FUNCTION LENGTH
-# ============================================================
-
-def check_long_javascript_functions(files):
-
-    findings = []
-
-    for file in files:
-
-        if file.suffix.lower() not in JS_EXTENSIONS:
-            continue
-
-        content = read_file(file)
-
-        if not content:
-            continue
-
-        source = content.encode(
-            "utf-8",
-            errors="ignore"
-        )
-
-        try:
-
-            tree, functions = (
-                _find_tree_sitter_functions(
-                    content
-                )
-            )
-
-        except Exception:
-
-            continue
-
-        for node in functions:
-
-            start_line = node.start_point[0] + 1
-
-            end_line = node.end_point[0] + 1
-
-            length = (
-                end_line
-                - start_line
-                + 1
-            )
-
-            if length > MAX_JS_FUNCTION_LINES:
-
-                name = _get_function_name(
-                    node,
-                    source
-                )
-
-                findings.append({
-                    "type": "Long JavaScript Function",
-                    "file": str(file),
-                    "function": name,
-                    "line": start_line,
-                    "details": f"{length} lines",
-                    "severity": "MEDIUM",
-                    "why": (
-                        "Large JavaScript functions often "
-                        "contain multiple responsibilities."
-                    ),
-                    "recommendation": (
-                        "Extract reusable logic into smaller "
-                        "helper functions or components."
-                    ),
-                    "priority": "MEDIUM"
-                })
-
-    return findings
 
 
 # ============================================================
