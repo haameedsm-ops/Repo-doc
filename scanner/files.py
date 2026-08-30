@@ -1,3 +1,4 @@
+
 from pathlib import Path
 
 
@@ -30,30 +31,15 @@ LANGUAGES = {
 
 IGNORED_DIRECTORIES = {
     ".git",
-    ".github",
     "node_modules",
     "venv",
     ".venv",
-    "env",
-    ".env",
     "__pycache__",
-    ".pytest_cache",
-    ".mypy_cache",
-    ".ruff_cache",
-    ".tox",
     "dist",
     "build",
     "target",
-    "out",
-    "coverage",
     ".idea",
     ".vscode",
-    ".gradle",
-    ".next",
-    ".nuxt",
-    ".cache",
-    "vendor",
-    "Pods",
 }
 
 
@@ -65,9 +51,6 @@ IGNORED_FILES = {
     "package-lock.json",
     "yarn.lock",
     "pnpm-lock.yaml",
-    "composer.lock",
-    "Cargo.lock",
-    "Gemfile.lock",
 }
 
 
@@ -79,39 +62,28 @@ TEXT_EXTENSIONS = set(LANGUAGES.keys())
 
 
 # ============================================================
-# MAX SOURCE FILE SIZE
-# ============================================================
-
-# Repo Doctor should not attempt expensive source analysis on
-# enormous generated/data-like files.
-#
-# Large source files are still detected by the quality scanner.
-# This limit only prevents pathological files from being pushed
-# through expensive AST/tree-sitter/duplicate analysis.
-
-MAX_SOURCE_FILE_SIZE_MB = 10
-
-MAX_SOURCE_FILE_SIZE = (
-    MAX_SOURCE_FILE_SIZE_MB * 1024 * 1024
-)
-
-
-# ============================================================
 # FILE SCANNER
 # ============================================================
 
 def scan_files(repo_path):
+    """
+    Scan a repository and return files that Repo Doctor can
+    safely analyze.
+
+    The scanner intentionally keeps all non-ignored files
+    instead of restricting the repository to known programming
+    language extensions. This allows documentation and project
+    configuration files to remain available to other scanners.
+    """
 
     repo = Path(repo_path)
 
     if not repo.exists():
-
         raise FileNotFoundError(
             "Repository path does not exist."
         )
 
     if not repo.is_dir():
-
         raise NotADirectoryError(
             "Repository path must be a directory."
         )
@@ -134,37 +106,10 @@ def scan_files(repo_path):
             continue
 
         # ----------------------------------------------------
-        # Ignore lockfiles
+        # Ignore dependency lockfiles
         # ----------------------------------------------------
 
         if file.name in IGNORED_FILES:
-            continue
-
-        # ----------------------------------------------------
-        # Only collect supported source files
-        # ----------------------------------------------------
-
-        if file.suffix.lower() not in TEXT_EXTENSIONS:
-            continue
-
-        # ----------------------------------------------------
-        # Ignore extremely large files from expensive
-        # source analysis.
-        #
-        # They are still source files, so the large-file
-        # checker can report them separately when possible.
-        # ----------------------------------------------------
-
-        try:
-
-            if file.stat().st_size > MAX_SOURCE_FILE_SIZE:
-                continue
-
-        except (
-            PermissionError,
-            OSError
-        ):
-
             continue
 
         files.append(file)
@@ -177,6 +122,7 @@ def scan_files(repo_path):
 # ============================================================
 
 def detect_languages(files):
+    """Detect programming languages from file extensions."""
 
     languages = {}
 
@@ -201,6 +147,12 @@ def detect_languages(files):
 # ============================================================
 
 def count_lines(files):
+    """
+    Count lines only in recognized source files.
+
+    Documentation, images, configuration files and other
+    non-source files are not included in the LOC total.
+    """
 
     total_lines = 0
 
@@ -229,7 +181,6 @@ def count_lines(files):
             PermissionError,
             OSError
         ):
-
             continue
 
     return total_lines
