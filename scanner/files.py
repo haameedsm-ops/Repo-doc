@@ -1,6 +1,10 @@
 from pathlib import Path
 
 
+# ============================================================
+# SUPPORTED LANGUAGES
+# ============================================================
+
 LANGUAGES = {
     ".py": "Python",
     ".js": "JavaScript",
@@ -20,29 +24,81 @@ LANGUAGES = {
 }
 
 
+# ============================================================
+# IGNORED DIRECTORIES
+# ============================================================
+
 IGNORED_DIRECTORIES = {
     ".git",
+    ".github",
     "node_modules",
     "venv",
     ".venv",
+    "env",
+    ".env",
     "__pycache__",
+    ".pytest_cache",
+    ".mypy_cache",
+    ".ruff_cache",
+    ".tox",
     "dist",
     "build",
     "target",
+    "out",
+    "coverage",
     ".idea",
     ".vscode",
+    ".gradle",
+    ".next",
+    ".nuxt",
+    ".cache",
+    "vendor",
+    "Pods",
 }
 
+
+# ============================================================
+# IGNORED FILES
+# ============================================================
 
 IGNORED_FILES = {
     "package-lock.json",
     "yarn.lock",
     "pnpm-lock.yaml",
+    "composer.lock",
+    "Cargo.lock",
+    "Gemfile.lock",
 }
 
 
+# ============================================================
+# SOURCE EXTENSIONS
+# ============================================================
+
 TEXT_EXTENSIONS = set(LANGUAGES.keys())
 
+
+# ============================================================
+# MAX SOURCE FILE SIZE
+# ============================================================
+
+# Repo Doctor should not attempt expensive source analysis on
+# enormous generated/data-like files.
+#
+# Large source files are still detected by the quality scanner.
+# This limit only prevents pathological files from being pushed
+# through expensive AST/tree-sitter/duplicate analysis.
+
+MAX_SOURCE_FILE_SIZE_MB = 10
+
+MAX_SOURCE_FILE_SIZE = (
+    MAX_SOURCE_FILE_SIZE_MB * 1024 * 1024
+)
+
+
+# ============================================================
+# FILE SCANNER
+# ============================================================
 
 def scan_files(repo_path):
 
@@ -54,6 +110,12 @@ def scan_files(repo_path):
             "Repository path does not exist."
         )
 
+    if not repo.is_dir():
+
+        raise NotADirectoryError(
+            "Repository path must be a directory."
+        )
+
     files = []
 
     for file in repo.rglob("*"):
@@ -61,21 +123,58 @@ def scan_files(repo_path):
         if not file.is_file():
             continue
 
+        # ----------------------------------------------------
         # Ignore unnecessary directories
+        # ----------------------------------------------------
+
         if any(
             part in IGNORED_DIRECTORIES
             for part in file.parts
         ):
             continue
 
-        # Ignore lockfiles from source analysis
+        # ----------------------------------------------------
+        # Ignore lockfiles
+        # ----------------------------------------------------
+
         if file.name in IGNORED_FILES:
+            continue
+
+        # ----------------------------------------------------
+        # Only collect supported source files
+        # ----------------------------------------------------
+
+        if file.suffix.lower() not in TEXT_EXTENSIONS:
+            continue
+
+        # ----------------------------------------------------
+        # Ignore extremely large files from expensive
+        # source analysis.
+        #
+        # They are still source files, so the large-file
+        # checker can report them separately when possible.
+        # ----------------------------------------------------
+
+        try:
+
+            if file.stat().st_size > MAX_SOURCE_FILE_SIZE:
+                continue
+
+        except (
+            PermissionError,
+            OSError
+        ):
+
             continue
 
         files.append(file)
 
     return files
 
+
+# ============================================================
+# LANGUAGE DETECTION
+# ============================================================
 
 def detect_languages(files):
 
@@ -85,16 +184,21 @@ def detect_languages(files):
 
         extension = file.suffix.lower()
 
-        if extension in LANGUAGES:
+        if extension not in LANGUAGES:
+            continue
 
-            language = LANGUAGES[extension]
+        language = LANGUAGES[extension]
 
-            languages[language] = (
-                languages.get(language, 0) + 1
-            )
+        languages[language] = (
+            languages.get(language, 0) + 1
+        )
 
     return languages
 
+
+# ============================================================
+# LINE COUNT
+# ============================================================
 
 def count_lines(files):
 
@@ -102,8 +206,9 @@ def count_lines(files):
 
     for file in files:
 
-        # Only count recognized source files
-        if file.suffix.lower() not in TEXT_EXTENSIONS:
+        extension = file.suffix.lower()
+
+        if extension not in TEXT_EXTENSIONS:
             continue
 
         try:
@@ -116,7 +221,8 @@ def count_lines(files):
             ) as f:
 
                 total_lines += sum(
-                    1 for _ in f
+                    1
+                    for _ in f
                 )
 
         except (

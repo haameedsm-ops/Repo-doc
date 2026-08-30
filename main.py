@@ -1,3 +1,4 @@
+
 from scanner.vulnerabilities import check_vulnerabilities_batch
 
 from scanner.git_analysis import analyze_git_repository
@@ -15,13 +16,7 @@ from scanner.health import (
     calculate_overall_score
 )
 
-from scanner.quality import (
-    check_large_files,
-    check_todos,
-    check_long_functions,
-    analyze_python_complexity,
-    analyze_javascript_quality
-)
+from scanner.quality import analyze_quality
 
 from scanner.files import (
     scan_files,
@@ -77,29 +72,9 @@ security_findings = scan_for_secrets(files)
 # CODE QUALITY SCAN
 # ============================================================
 
-quality_findings = []
-
-quality_findings.extend(
-    check_large_files(
-        files,
-        config
-    )
-)
-
-quality_findings.extend(
-    check_todos(files)
-)
-
-quality_findings.extend(
-    check_long_functions(files)
-)
-
-quality_findings.extend(
-    analyze_python_complexity(files)
-)
-
-quality_findings.extend(
-    analyze_javascript_quality(files)
+quality_findings = analyze_quality(
+    files,
+    config
 )
 
 
@@ -407,6 +382,14 @@ if quality_findings:
             print(
                 f"    Function: "
                 f"{finding['function']}"
+            )
+
+        # Duplicate/similar code has a second file.
+        if "file_2" in finding:
+
+            print(
+                f"    Compared with: "
+                f"{finding['file_2']}"
             )
 
         print(
