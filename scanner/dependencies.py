@@ -10,31 +10,43 @@ import requests
 # ============================================================
 
 DEPENDENCY_FILES = {
-
     "requirements.txt": "Python",
-
     "package.json": "Node.js",
-
     "pom.xml": "Java",
-
     "build.gradle": "Java",
-
 }
 
 
-IGNORED_DIRECTORIES = {
+# ============================================================
+# IGNORED DIRECTORIES
+# ============================================================
 
+IGNORED_DIRECTORIES = {
     ".git",
+    ".github",
     "node_modules",
     "venv",
     ".venv",
+    "env",
+    ".env",
     "__pycache__",
+    ".pytest_cache",
+    ".mypy_cache",
+    ".ruff_cache",
+    ".tox",
+    ".gradle",
+    ".idea",
+    ".vscode",
+    ".next",
+    ".nuxt",
+    ".cache",
     "dist",
     "build",
     "target",
-    ".idea",
-    ".vscode",
-
+    "out",
+    "coverage",
+    "vendor",
+    "Pods",
 }
 
 
@@ -43,18 +55,29 @@ IGNORED_DIRECTORIES = {
 # ============================================================
 
 def find_dependency_files(repo_path):
+    """
+    Find dependency manifests efficiently.
+
+    Each physical dependency file is returned only once.
+    Generated/vendor directories are skipped.
+    """
 
     repo = Path(repo_path)
 
-    if not repo.exists():
+    if not repo.exists() or not repo.is_dir():
         return []
 
     found = []
+    seen = set()
 
     for file in repo.rglob("*"):
 
         if not file.is_file():
             continue
+
+        # ----------------------------------------------------
+        # Ignore unnecessary directories
+        # ----------------------------------------------------
 
         if any(
             part in IGNORED_DIRECTORIES
@@ -62,9 +85,29 @@ def find_dependency_files(repo_path):
         ):
             continue
 
-        if file.name.lower() in DEPENDENCY_FILES:
+        # ----------------------------------------------------
+        # Only inspect known dependency files
+        # ----------------------------------------------------
 
-            found.append(file)
+        filename = file.name.lower()
+
+        if filename not in DEPENDENCY_FILES:
+            continue
+
+        # ----------------------------------------------------
+        # Prevent duplicate paths
+        # ----------------------------------------------------
+
+        try:
+            resolved = file.resolve()
+        except OSError:
+            resolved = file.absolute()
+
+        if resolved in seen:
+            continue
+
+        seen.add(resolved)
+        found.append(file)
 
     return found
 
@@ -74,11 +117,13 @@ def find_dependency_files(repo_path):
 # ============================================================
 
 def parse_requirements(file):
+    """
+    Parse dependencies from requirements.txt.
+    """
 
     dependencies = []
 
     try:
-
         content = file.read_text(
             encoding="utf-8",
             errors="ignore"
@@ -88,23 +133,29 @@ def parse_requirements(file):
         PermissionError,
         OSError
     ):
-
         return dependencies
-
 
     for line in content.splitlines():
 
         line = line.strip()
 
+        # Empty line
         if not line:
             continue
 
+        # Comment
         if line.startswith("#"):
             continue
 
+        # Options such as:
+        # -r requirements-dev.txt
+        # --index-url ...
         if line.startswith("-"):
             continue
 
+        # ----------------------------------------------------
+        # Package with version
+        # ----------------------------------------------------
 
         match = re.match(
             r"^([A-Za-z0-9_.-]+)\s*"
@@ -113,18 +164,18 @@ def parse_requirements(file):
             line
         )
 
-
         if match:
 
             dependencies.append({
-
                 "name": match.group(1),
-
                 "version": match.group(2)
-
             })
 
         else:
+
+            # ------------------------------------------------
+            # Package without version
+            # ------------------------------------------------
 
             package_match = re.match(
                 r"^([A-Za-z0-9_.-]+)",
@@ -134,15 +185,9 @@ def parse_requirements(file):
             if package_match:
 
                 dependencies.append({
-
-                    "name":
-                        package_match.group(1),
-
-                    "version":
-                        "unspecified"
-
+                    "name": package_match.group(1),
+                    "version": "unspecified"
                 })
-
 
     return dependencies
 
@@ -152,6 +197,15 @@ def parse_requirements(file):
 # ============================================================
 
 def parse_package_json(file):
+    """
+    Parse dependencies from package.json.
+
+    Reads:
+    - dependencies
+    - devDependencies
+    - optionalDependencies
+    - peerDependencies
+    """
 
     dependencies = []
 
@@ -168,25 +222,16 @@ def parse_package_json(file):
         OSError,
         json.JSONDecodeError
     ):
-
         return dependencies
 
-
     sections = [
-
         "dependencies",
-
         "devDependencies",
-
         "optionalDependencies",
-
         "peerDependencies"
-
     ]
 
-
     seen = set()
-
 
     for section in sections:
 
@@ -195,14 +240,11 @@ def parse_package_json(file):
             {}
         )
 
-
         if not isinstance(
             packages,
             dict
         ):
-
             continue
-
 
         for name, version in packages.items():
 
@@ -211,16 +253,10 @@ def parse_package_json(file):
 
             seen.add(name)
 
-
             dependencies.append({
-
                 "name": name,
-
-                "version":
-                    clean_npm_version(version)
-
+                "version": clean_npm_version(version)
             })
-
 
     return dependencies
 
@@ -230,17 +266,26 @@ def parse_package_json(file):
 # ============================================================
 
 def clean_npm_version(version):
+    """
+    Convert npm version expressions into a usable
+    semantic version.
+
+    Examples:
+
+    ^5.3.1       -> 5.3.1
+    ~4.19.2      -> 4.19.2
+    >=9.0.1      -> 9.0.1
+    9.0.1        -> 9.0.1
+    latest       -> unspecified
+    """
 
     if not isinstance(
         version,
         str
     ):
-
         return "unspecified"
 
-
     version = version.strip()
-
 
     match = re.search(
         r"\d+\.\d+\.\d+"
@@ -248,11 +293,8 @@ def clean_npm_version(version):
         version
     )
 
-
     if match:
-
         return match.group(0)
-
 
     return "unspecified"
 
@@ -266,14 +308,10 @@ def parse_dependency_file(file):
     filename = file.name.lower()
 
     if filename == "requirements.txt":
-
         return parse_requirements(file)
 
-
     if filename == "package.json":
-
         return parse_package_json(file)
-
 
     return []
 
@@ -283,6 +321,15 @@ def parse_dependency_file(file):
 # ============================================================
 
 def parse_version(version):
+    """
+    Convert semantic version into:
+
+    (major, minor, patch)
+
+    Example:
+
+    5.3.1 -> (5, 3, 1)
+    """
 
     if not version:
         return None
@@ -320,21 +367,17 @@ def get_latest_npm_version(package):
             timeout=5
         )
 
-
         if response.status_code != 200:
             return None
-
 
         data = response.json()
 
         return data.get("version")
 
-
     except (
         requests.RequestException,
         ValueError
     ):
-
         return None
 
 
@@ -352,16 +395,13 @@ def get_latest_pypi_version(package):
             + "/json"
         )
 
-
         response = requests.get(
             url,
             timeout=5
         )
 
-
         if response.status_code != 200:
             return None
-
 
         data = response.json()
 
@@ -371,12 +411,10 @@ def get_latest_pypi_version(package):
             .get("version")
         )
 
-
     except (
         requests.RequestException,
         ValueError
     ):
-
         return None
 
 
@@ -388,9 +426,15 @@ def check_outdated_dependencies(
     dependencies,
     ecosystem
 ):
+    """
+    Check whether dependencies are behind the latest
+    published version.
+
+    This function is currently optional and can be used
+    later for dependency health recommendations.
+    """
 
     results = []
-
 
     for dependency in dependencies:
 
@@ -402,15 +446,16 @@ def check_outdated_dependencies(
             "version"
         )
 
-
         if (
             not name
             or not current
             or current == "unspecified"
         ):
-
             continue
 
+        # ----------------------------------------------------
+        # Get latest version
+        # ----------------------------------------------------
 
         if ecosystem == "npm":
 
@@ -428,10 +473,12 @@ def check_outdated_dependencies(
 
             latest = None
 
-
         if not latest:
             continue
 
+        # ----------------------------------------------------
+        # Parse versions
+        # ----------------------------------------------------
 
         current_version = parse_version(
             current
@@ -441,34 +488,39 @@ def check_outdated_dependencies(
             latest
         )
 
-
-        if (
+        if not (
             current_version
             and latest_version
-            and latest_version > current_version
         ):
+            continue
+
+        # ----------------------------------------------------
+        # Compare versions
+        # ----------------------------------------------------
+
+        if latest_version > current_version:
 
             major_difference = (
                 latest_version[0]
                 > current_version[0]
             )
 
+            minor_difference = (
+                latest_version[1]
+                > current_version[1]
+            )
 
             if major_difference:
 
                 severity = "HIGH"
 
-            elif (
-                latest_version[1]
-                > current_version[1]
-            ):
+            elif minor_difference:
 
                 severity = "MEDIUM"
 
             else:
 
                 severity = "LOW"
-
 
             results.append({
 
@@ -481,6 +533,5 @@ def check_outdated_dependencies(
                 "severity": severity
 
             })
-
 
     return results

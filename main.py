@@ -1,7 +1,13 @@
+from time import perf_counter
+from pathlib import Path
 
-from scanner.vulnerabilities import check_vulnerabilities_batch
+from scanner.vulnerabilities import (
+    check_vulnerabilities_batch
+)
 
-from scanner.git_analysis import analyze_git_repository
+from scanner.git_analysis import (
+    analyze_git_repository
+)
 
 from scanner.dependencies import (
     find_dependency_files,
@@ -16,7 +22,9 @@ from scanner.health import (
     calculate_overall_score
 )
 
-from scanner.quality import analyze_quality
+from scanner.quality import (
+    analyze_quality
+)
 
 from scanner.files import (
     scan_files,
@@ -24,55 +32,153 @@ from scanner.files import (
     count_lines
 )
 
-from scanner.security import scan_for_secrets
-from scanner.config import load_config
+from scanner.security import (
+    scan_for_secrets
+)
+
+from scanner.config import (
+    load_config
+)
+
+
+# ============================================================
+# TIMING HELPER
+# ============================================================
+
+def run_stage(name, function, *args):
+    """
+    Run a scanner stage and report execution time.
+    """
+
+    start = perf_counter()
+
+    result = function(*args)
+
+    elapsed = perf_counter() - start
+
+    print(
+        f"   ⏱ {name}: {elapsed:.2f}s"
+    )
+
+    return result
 
 
 # ============================================================
 # REPOSITORY INPUT
 # ============================================================
 
-repo_path = input("Enter repository path: ").strip()
+repo_path = input(
+    "Enter repository path: "
+).strip()
 
 if not repo_path:
-    print("❌ Repository path cannot be empty.")
+
+    print(
+        "❌ Repository path cannot be empty."
+    )
+
     exit()
 
-config = load_config(repo_path)
 
-print("\n🔎 Scanning repository...\n")
+repo = Path(repo_path)
+
+if not repo.exists():
+
+    print(
+        "❌ Repository path does not exist."
+    )
+
+    exit()
+
+
+if not repo.is_dir():
+
+    print(
+        "❌ Repository path must be a directory."
+    )
+
+    exit()
+
+
+config = load_config(
+    repo_path
+)
+
+print(
+    "\n🔎 Scanning repository...\n"
+)
+
+total_start = perf_counter()
 
 
 # ============================================================
 # GIT ANALYSIS
 # ============================================================
 
-git_info = analyze_git_repository(repo_path)
+print(
+    "🔧 Analyzing Git..."
+)
+
+git_info = run_stage(
+    "Git analysis",
+    analyze_git_repository,
+    repo_path
+)
 
 
 # ============================================================
 # BASIC REPOSITORY SCAN
 # ============================================================
 
-files = scan_files(repo_path)
+print(
+    "\n📁 Scanning source files..."
+)
 
-languages = detect_languages(files)
+files = run_stage(
+    "File scanning",
+    scan_files,
+    repo_path
+)
 
-lines = count_lines(files)
+languages = run_stage(
+    "Language detection",
+    detect_languages,
+    files
+)
+
+lines = run_stage(
+    "Line counting",
+    count_lines,
+    files
+)
 
 
 # ============================================================
 # SECURITY SCAN
 # ============================================================
 
-security_findings = scan_for_secrets(files)
+print(
+    "\n🔐 Running security scan..."
+)
+
+security_findings = run_stage(
+    "Secret scanning",
+    scan_for_secrets,
+    files
+)
 
 
 # ============================================================
 # CODE QUALITY SCAN
 # ============================================================
 
-quality_findings = analyze_quality(
+print(
+    "\n🧹 Running code quality scan..."
+)
+
+quality_findings = run_stage(
+    "Quality analysis",
+    analyze_quality,
     files,
     config
 )
@@ -82,7 +188,15 @@ quality_findings = analyze_quality(
 # DEPENDENCY SCAN
 # ============================================================
 
-dependency_files = find_dependency_files(repo_path)
+print(
+    "\n📦 Discovering dependencies..."
+)
+
+dependency_files = run_stage(
+    "Dependency discovery",
+    find_dependency_files,
+    repo_path
+)
 
 dependency_findings = []
 
@@ -103,36 +217,91 @@ for file in dependency_files:
     filename = file.name.lower()
 
     # --------------------------------------------------------
-    # Python
+    # PYTHON
     # --------------------------------------------------------
 
     if filename == "requirements.txt":
 
-        dependencies = parse_requirements(file)
+        dependencies = parse_requirements(
+            file
+        )
 
         for dependency in dependencies:
 
-            dependency["_file"] = file.name
+            # IMPORTANT:
+            # Store complete manifest path
+            # instead of only "requirements.txt"
 
-            dependency_groups["PyPI"].append(
+            dependency["_file"] = str(
+                file.resolve()
+            )
+
+            dependency_groups[
+                "PyPI"
+            ].append(
                 dependency
             )
 
     # --------------------------------------------------------
-    # Node.js
+    # NODE.JS
     # --------------------------------------------------------
 
     elif filename == "package.json":
 
-        dependencies = parse_package_json(file)
+        dependencies = parse_package_json(
+            file
+        )
 
         for dependency in dependencies:
 
-            dependency["_file"] = file.name
+            # IMPORTANT:
+            # Store complete manifest path
+            # instead of only "package.json"
 
-            dependency_groups["npm"].append(
+            dependency["_file"] = str(
+                file.resolve()
+            )
+
+            dependency_groups[
+                "npm"
+            ].append(
                 dependency
             )
+
+
+# ============================================================
+# REMOVE DUPLICATE DEPENDENCIES
+# ============================================================
+
+for ecosystem in dependency_groups:
+
+    unique_dependencies = []
+
+    seen_dependencies = set()
+
+    for dependency in dependency_groups[
+        ecosystem
+    ]:
+
+        key = (
+            dependency.get("name"),
+            dependency.get("version")
+        )
+
+        if key in seen_dependencies:
+            continue
+
+        seen_dependencies.add(
+            key
+        )
+
+        unique_dependencies.append(
+            dependency
+        )
+
+    dependency_groups[
+        ecosystem
+    ] = unique_dependencies
 
 
 # ============================================================
@@ -144,29 +313,41 @@ python_vulnerabilities = {}
 npm_vulnerabilities = {}
 
 
+# ------------------------------------------------------------
+# PYTHON VULNERABILITIES
+# ------------------------------------------------------------
+
 if dependency_groups["PyPI"]:
 
     print(
-        f"🔐 Scanning "
+        f"\n🔐 Scanning "
         f"{len(dependency_groups['PyPI'])} "
         f"Python dependencies..."
     )
 
-    python_vulnerabilities = check_vulnerabilities_batch(
+    python_vulnerabilities = run_stage(
+        "Python vulnerability scan",
+        check_vulnerabilities_batch,
         dependency_groups["PyPI"],
         "PyPI"
     )
 
 
+# ------------------------------------------------------------
+# NPM VULNERABILITIES
+# ------------------------------------------------------------
+
 if dependency_groups["npm"]:
 
     print(
-        f"🔐 Scanning "
+        f"\n🔐 Scanning "
         f"{len(dependency_groups['npm'])} "
         f"npm dependencies..."
     )
 
-    npm_vulnerabilities = check_vulnerabilities_batch(
+    npm_vulnerabilities = run_stage(
+        "npm vulnerability scan",
+        check_vulnerabilities_batch,
         dependency_groups["npm"],
         "npm"
     )
@@ -179,19 +360,32 @@ if dependency_groups["npm"]:
 for ecosystem, dependencies in dependency_groups.items():
 
     if ecosystem == "PyPI":
-        vulnerability_map = python_vulnerabilities
+
+        vulnerability_map = (
+            python_vulnerabilities
+        )
+
     else:
-        vulnerability_map = npm_vulnerabilities
+
+        vulnerability_map = (
+            npm_vulnerabilities
+        )
 
     for dependency in dependencies:
 
-        name = dependency["name"]
+        name = dependency[
+            "name"
+        ]
 
-        version = dependency["version"]
+        version = dependency[
+            "version"
+        ]
 
-        vulnerabilities = vulnerability_map.get(
-            (name, version),
-            []
+        vulnerabilities = (
+            vulnerability_map.get(
+                (name, version),
+                []
+            )
         )
 
         dependency_results.append({
@@ -208,21 +402,31 @@ for ecosystem, dependencies in dependency_groups.items():
 
         })
 
+        # ----------------------------------------------------
+        # Vulnerability finding
+        # ----------------------------------------------------
+
         if vulnerabilities:
 
             dependency_findings.append({
 
-                "type": "Vulnerable Dependency",
+                "type":
+                    "Vulnerable Dependency",
 
-                "package": name,
+                "package":
+                    name,
 
-                "version": version,
+                "version":
+                    version,
 
-                "count": len(vulnerabilities),
+                "count":
+                    len(vulnerabilities),
 
-                "severity": "HIGH",
+                "severity":
+                    "HIGH",
 
-                "confidence": 100
+                "confidence":
+                    100
 
             })
 
@@ -232,7 +436,8 @@ for ecosystem, dependencies in dependency_groups.items():
 # ============================================================
 
 all_security_findings = (
-    security_findings +
+    security_findings
+    +
     dependency_findings
 )
 
@@ -266,9 +471,13 @@ overall_score = calculate_overall_score(
 
 print("\n")
 
-print("🩺 REPO DOCTOR")
+print(
+    "🩺 REPO DOCTOR"
+)
 
-print("=" * 40)
+print(
+    "=" * 40
+)
 
 print(
     f"Source files: {len(files)}"
@@ -283,9 +492,13 @@ print(
 # PROJECT DNA
 # ============================================================
 
-print("\n🧬 PROJECT DNA")
+print(
+    "\n🧬 PROJECT DNA"
+)
 
-print("-" * 40)
+print(
+    "-" * 40
+)
 
 if languages:
 
@@ -296,7 +509,8 @@ if languages:
     ):
 
         print(
-            f"{language:<18} {count} files"
+            f"{language:<18} "
+            f"{count} files"
         )
 
 else:
@@ -310,9 +524,13 @@ else:
 # SECURITY SCAN
 # ============================================================
 
-print("\n🔐 SECURITY SCAN")
+print(
+    "\n🔐 SECURITY SCAN"
+)
 
-print("-" * 40)
+print(
+    "-" * 40
+)
 
 if security_findings:
 
@@ -323,7 +541,9 @@ if security_findings:
 
     for finding in security_findings:
 
-        location = finding["file"]
+        location = finding[
+            "file"
+        ]
 
         if "line" in finding:
 
@@ -347,12 +567,16 @@ else:
 
 
 # ============================================================
-# CODE QUALITY + SMART DIAGNOSIS
+# CODE QUALITY
 # ============================================================
 
-print("\n🧹 CODE QUALITY")
+print(
+    "\n🧹 CODE QUALITY"
+)
 
-print("-" * 40)
+print(
+    "-" * 40
+)
 
 if quality_findings:
 
@@ -363,7 +587,9 @@ if quality_findings:
 
     for finding in quality_findings:
 
-        location = finding["file"]
+        location = finding[
+            "file"
+        ]
 
         if "line" in finding:
 
@@ -384,7 +610,10 @@ if quality_findings:
                 f"{finding['function']}"
             )
 
-        # Duplicate/similar code has a second file.
+        # ----------------------------------------------------
+        # Duplicate/similar code
+        # ----------------------------------------------------
+
         if "file_2" in finding:
 
             print(
@@ -392,9 +621,19 @@ if quality_findings:
                 f"{finding['file_2']}"
             )
 
-        print(
-            f"    {finding['details']}"
-        )
+        # ----------------------------------------------------
+        # Details
+        # ----------------------------------------------------
+
+        if "details" in finding:
+
+            print(
+                f"    {finding['details']}"
+            )
+
+        # ----------------------------------------------------
+        # Why
+        # ----------------------------------------------------
 
         if "why" in finding:
 
@@ -403,12 +642,20 @@ if quality_findings:
                 f"{finding['why']}"
             )
 
+        # ----------------------------------------------------
+        # Recommendation
+        # ----------------------------------------------------
+
         if "recommendation" in finding:
 
             print(
                 f"    🛠 Recommendation: "
                 f"{finding['recommendation']}"
             )
+
+        # ----------------------------------------------------
+        # Priority
+        # ----------------------------------------------------
 
         if "priority" in finding:
 
@@ -428,9 +675,13 @@ else:
 # DEPENDENCY ANALYSIS
 # ============================================================
 
-print("\n📦 DEPENDENCY ANALYSIS")
+print(
+    "\n📦 DEPENDENCY ANALYSIS"
+)
 
-print("-" * 40)
+print(
+    "-" * 40
+)
 
 if not dependency_files:
 
@@ -440,31 +691,55 @@ if not dependency_files:
 
 else:
 
-    manifest_files = []
+    # --------------------------------------------------------
+    # Display every physical dependency manifest
+    # separately.
+    # --------------------------------------------------------
 
     for file in dependency_files:
 
-        if file.name.lower() in {
+        filename = file.name.lower()
+
+        if filename not in {
             "requirements.txt",
             "package.json"
         }:
+            continue
 
-            if file not in manifest_files:
+        # ----------------------------------------------------
+        # Match using absolute path
+        # ----------------------------------------------------
 
-                manifest_files.append(file)
-
-    for file in manifest_files:
+        file_path = str(
+            file.resolve()
+        )
 
         file_results = [
 
             result
+
             for result in dependency_results
-            if result["file"] == file.name
+
+            if result["file"] == file_path
 
         ]
 
+        # ----------------------------------------------------
+        # Display relative manifest path
+        # ----------------------------------------------------
+
+        try:
+
+            display_path = file.relative_to(
+                repo
+            )
+
+        except ValueError:
+
+            display_path = file
+
         print(
-            f"\n📄 {file.name}"
+            f"\n📄 {display_path}"
         )
 
         print(
@@ -472,21 +747,38 @@ else:
             f"{len(file_results)}"
         )
 
+        # ----------------------------------------------------
+        # Vulnerable packages
+        # ----------------------------------------------------
+
         vulnerable_results = [
 
             result
+
             for result in file_results
+
             if result["vulnerabilities"]
 
         ]
 
+        # ----------------------------------------------------
+        # Unspecified versions
+        # ----------------------------------------------------
+
         unspecified_results = [
 
             result
+
             for result in file_results
-            if result["version"] == "unspecified"
+
+            if result["version"]
+            == "unspecified"
 
         ]
+
+        # ----------------------------------------------------
+        # Display vulnerabilities
+        # ----------------------------------------------------
 
         if vulnerable_results:
 
@@ -508,7 +800,9 @@ else:
                     f"known vulnerability(s)"
                 )
 
-                for vuln in result["vulnerabilities"]:
+                for vuln in result[
+                    "vulnerabilities"
+                ]:
 
                     print(
                         f"    ID: "
@@ -520,6 +814,10 @@ else:
             print(
                 "  ✅ No known vulnerabilities found"
             )
+
+        # ----------------------------------------------------
+        # Display unspecified versions
+        # ----------------------------------------------------
 
         if unspecified_results:
 
@@ -533,23 +831,34 @@ else:
 # DEPENDENCY SUMMARY
 # ============================================================
 
-print("\n📊 Dependency Summary")
+print(
+    "\n📊 Dependency Summary"
+)
 
-print("-" * 30)
+print(
+    "-" * 30
+)
 
 total_dependencies = len(
     dependency_results
 )
 
 vulnerable_packages = sum(
+
     1
+
     for result in dependency_results
+
     if result["vulnerabilities"]
+
 )
 
 total_vulnerabilities = sum(
+
     len(result["vulnerabilities"])
+
     for result in dependency_results
+
 )
 
 print(
@@ -572,9 +881,13 @@ print(
 # GIT HEALTH
 # ============================================================
 
-print("\n📜 GIT HEALTH")
+print(
+    "\n📜 GIT HEALTH"
+)
 
-print("-" * 40)
+print(
+    "-" * 40
+)
 
 if git_info["is_git"]:
 
@@ -597,11 +910,15 @@ if git_info["is_git"]:
         f"{git_info['branches']}"
     )
 
-    last_commit = git_info["last_commit"]
+    last_commit = (
+        git_info["last_commit"]
+    )
 
     if last_commit:
 
-        print("\nLast commit:")
+        print(
+            "\nLast commit:"
+        )
 
         print(
             f"    {last_commit['hash']} "
@@ -624,9 +941,13 @@ else:
 # REPOSITORY HEALTH
 # ============================================================
 
-print("\n🩺 REPOSITORY HEALTH")
+print(
+    "\n🩺 REPOSITORY HEALTH"
+)
 
-print("=" * 40)
+print(
+    "=" * 40
+)
 
 print(
     f"Overall Health      "
@@ -653,9 +974,13 @@ print(
 # FINAL STATUS
 # ============================================================
 
-print("\n🩺 DIAGNOSIS")
+print(
+    "\n🩺 DIAGNOSIS"
+)
 
-print("-" * 40)
+print(
+    "-" * 40
+)
 
 if overall_score >= 90:
 
@@ -680,3 +1005,26 @@ else:
     print(
         "🔴 Critical repository health issues detected."
     )
+
+
+# ============================================================
+# PERFORMANCE SUMMARY
+# ============================================================
+
+total_elapsed = (
+    perf_counter()
+    - total_start
+)
+
+print(
+    "\n⚡ SCAN PERFORMANCE"
+)
+
+print(
+    "-" * 40
+)
+
+print(
+    f"Total scan time: "
+    f"{total_elapsed:.2f}s"
+)

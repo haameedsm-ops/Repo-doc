@@ -1,4 +1,3 @@
-
 from pathlib import Path
 
 
@@ -31,15 +30,30 @@ LANGUAGES = {
 
 IGNORED_DIRECTORIES = {
     ".git",
+    ".github",
     "node_modules",
     "venv",
     ".venv",
+    "env",
+    ".env",
     "__pycache__",
+    ".pytest_cache",
+    ".mypy_cache",
+    ".ruff_cache",
+    ".tox",
+    ".gradle",
+    ".idea",
+    ".vscode",
+    ".next",
+    ".nuxt",
+    ".cache",
     "dist",
     "build",
     "target",
-    ".idea",
-    ".vscode",
+    "out",
+    "coverage",
+    "vendor",
+    "Pods",
 }
 
 
@@ -51,6 +65,9 @@ IGNORED_FILES = {
     "package-lock.json",
     "yarn.lock",
     "pnpm-lock.yaml",
+    "composer.lock",
+    "Cargo.lock",
+    "Gemfile.lock",
 }
 
 
@@ -62,18 +79,26 @@ TEXT_EXTENSIONS = set(LANGUAGES.keys())
 
 
 # ============================================================
+# MAX SOURCE FILE SIZE
+# ============================================================
+
+MAX_SOURCE_FILE_SIZE_MB = 10
+
+MAX_SOURCE_FILE_SIZE = (
+    MAX_SOURCE_FILE_SIZE_MB * 1024 * 1024
+)
+
+
+# ============================================================
 # FILE SCANNER
 # ============================================================
 
 def scan_files(repo_path):
     """
-    Scan a repository and return files that Repo Doctor can
-    safely analyze.
+    Scan a repository efficiently.
 
-    The scanner intentionally keeps all non-ignored files
-    instead of restricting the repository to known programming
-    language extensions. This allows documentation and project
-    configuration files to remain available to other scanners.
+    Only supported source files are returned.
+    Large files are skipped from expensive analysis.
     """
 
     repo = Path(repo_path)
@@ -110,6 +135,28 @@ def scan_files(repo_path):
         # ----------------------------------------------------
 
         if file.name in IGNORED_FILES:
+            continue
+
+        # ----------------------------------------------------
+        # Only collect supported source files
+        # ----------------------------------------------------
+
+        if file.suffix.lower() not in TEXT_EXTENSIONS:
+            continue
+
+        # ----------------------------------------------------
+        # Skip extremely large files
+        # ----------------------------------------------------
+
+        try:
+
+            if file.stat().st_size > MAX_SOURCE_FILE_SIZE:
+                continue
+
+        except (
+            PermissionError,
+            OSError
+        ):
             continue
 
         files.append(file)
@@ -149,9 +196,6 @@ def detect_languages(files):
 def count_lines(files):
     """
     Count lines only in recognized source files.
-
-    Documentation, images, configuration files and other
-    non-source files are not included in the LOC total.
     """
 
     total_lines = 0
