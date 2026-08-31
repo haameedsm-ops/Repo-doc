@@ -1,8 +1,10 @@
 from pathlib import Path
-
+import os
 import re
 import json
 import requests
+
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 
 # ============================================================
@@ -51,6 +53,19 @@ IGNORED_DIRECTORIES = {
 
 
 # ============================================================
+# NETWORK SETTINGS
+# ============================================================
+
+NETWORK_TIMEOUT = 3
+
+SESSION = requests.Session()
+
+SESSION.headers.update({
+    "User-Agent": "Repo-Doctor/1.0"
+})
+
+
+# ============================================================
 # FIND DEPENDENCY FILES
 # ============================================================
 
@@ -58,8 +73,9 @@ def find_dependency_files(repo_path):
     """
     Find dependency manifests efficiently.
 
-    Each physical dependency file is returned only once.
-    Generated/vendor directories are skipped.
+    Ignored directories are pruned during traversal so
+    Repo Doctor does not waste time scanning node_modules,
+    .git, build output, virtual environments, etc.
     """
 
     repo = Path(repo_path)
@@ -70,44 +86,38 @@ def find_dependency_files(repo_path):
     found = []
     seen = set()
 
-    for file in repo.rglob("*"):
-
-        if not file.is_file():
-            continue
+    for current_root, directories, files in os.walk(repo):
 
         # ----------------------------------------------------
-        # Ignore unnecessary directories
+        # Prune ignored directories BEFORE entering them
         # ----------------------------------------------------
 
-        if any(
-            part in IGNORED_DIRECTORIES
-            for part in file.parts
-        ):
-            continue
+        directories[:] = [
+            directory
+            for directory in directories
+            if directory.lower() not in IGNORED_DIRECTORIES
+        ]
 
-        # ----------------------------------------------------
-        # Only inspect known dependency files
-        # ----------------------------------------------------
+        current_path = Path(current_root)
 
-        filename = file.name.lower()
+        for filename in files:
 
-        if filename not in DEPENDENCY_FILES:
-            continue
+            if filename.lower() not in DEPENDENCY_FILES:
+                continue
 
-        # ----------------------------------------------------
-        # Prevent duplicate paths
-        # ----------------------------------------------------
+            file = current_path / filename
 
-        try:
-            resolved = file.resolve()
-        except OSError:
-            resolved = file.absolute()
+            try:
+                resolved = file.resolve()
+            except OSError:
+                resolved = file.absolute()
 
-        if resolved in seen:
-            continue
+            if resolved in seen:
+                continue
 
-        seen.add(resolved)
-        found.append(file)
+            seen.add(resolved)
+
+            found.append(file)
 
     return found
 
@@ -129,38 +139,32 @@ def parse_requirements(file):
             errors="ignore"
         )
 
-    except (
-        PermissionError,
-        OSError
-    ):
+    except (PermissionError, OSError):
+
         return dependencies
 
     for line in content.splitlines():
 
         line = line.strip()
 
-        # Empty line
         if not line:
             continue
 
-        # Comment
         if line.startswith("#"):
             continue
 
-        # Options such as:
-        # -r requirements-dev.txt
-        # --index-url ...
+        # Ignore pip options
         if line.startswith("-"):
             continue
 
-        # ----------------------------------------------------
-        # Package with version
-        # ----------------------------------------------------
+        # Remove inline comments
+        line = line.split("#", 1)[0].strip()
 
+        # Package with version
         match = re.match(
             r"^([A-Za-z0-9_.-]+)\s*"
             r"(?:==|>=|<=|~=|>|<)\s*"
-            r"([A-Za-z0-9.*+-]+)",
+            r"([A-Za-z0-9.*+!-]+)",
             line
         )
 
@@ -171,23 +175,20 @@ def parse_requirements(file):
                 "version": match.group(2)
             })
 
-        else:
+            continue
 
-            # ------------------------------------------------
-            # Package without version
-            # ------------------------------------------------
+        # Package without version
+        package_match = re.match(
+            r"^([A-Za-z0-9_.-]+)",
+            line
+        )
 
-            package_match = re.match(
-                r"^([A-Za-z0-9_.-]+)",
-                line
-            )
+        if package_match:
 
-            if package_match:
-
-                dependencies.append({
-                    "name": package_match.group(1),
-                    "version": "unspecified"
-                })
+            dependencies.append({
+                "name": package_match.group(1),
+                "version": "unspecified"
+            })
 
     return dependencies
 
@@ -222,6 +223,7 @@ def parse_package_json(file):
         OSError,
         json.JSONDecodeError
     ):
+
         return dependencies
 
     sections = [
@@ -240,10 +242,7 @@ def parse_package_json(file):
             {}
         )
 
-        if not isinstance(
-            packages,
-            dict
-        ):
+        if not isinstance(packages, dict):
             continue
 
         for name, version in packages.items():
@@ -271,18 +270,14 @@ def clean_npm_version(version):
     semantic version.
 
     Examples:
-
-    ^5.3.1       -> 5.3.1
-    ~4.19.2      -> 4.19.2
-    >=9.0.1      -> 9.0.1
-    9.0.1        -> 9.0.1
-    latest       -> unspecified
+        ^5.3.1  -> 5.3.1
+        ~4.19.2 -> 4.19.2
+        >=9.0.1 -> 9.0.1
+        9.0.1   -> 9.0.1
+        latest  -> unspecified
     """
 
-    if not isinstance(
-        version,
-        str
-    ):
+    if not isinstance(version, str):
         return "unspecified"
 
     version = version.strip()
@@ -304,6 +299,9 @@ def clean_npm_version(version):
 # ============================================================
 
 def parse_dependency_file(file):
+    """
+    Parse a supported dependency manifest.
+    """
 
     filename = file.name.lower()
 
@@ -324,11 +322,10 @@ def parse_version(version):
     """
     Convert semantic version into:
 
-    (major, minor, patch)
+        (major, minor, patch)
 
     Example:
-
-    5.3.1 -> (5, 3, 1)
+        5.3.1 -> (5, 3, 1)
     """
 
     if not version:
@@ -353,6 +350,9 @@ def parse_version(version):
 # ============================================================
 
 def get_latest_npm_version(package):
+    """
+    Get the latest published npm version.
+    """
 
     try:
 
@@ -362,9 +362,9 @@ def get_latest_npm_version(package):
             + "/latest"
         )
 
-        response = requests.get(
+        response = SESSION.get(
             url,
-            timeout=5
+            timeout=NETWORK_TIMEOUT
         )
 
         if response.status_code != 200:
@@ -378,6 +378,7 @@ def get_latest_npm_version(package):
         requests.RequestException,
         ValueError
     ):
+
         return None
 
 
@@ -386,6 +387,9 @@ def get_latest_npm_version(package):
 # ============================================================
 
 def get_latest_pypi_version(package):
+    """
+    Get the latest published PyPI version.
+    """
 
     try:
 
@@ -395,9 +399,9 @@ def get_latest_pypi_version(package):
             + "/json"
         )
 
-        response = requests.get(
+        response = SESSION.get(
             url,
-            timeout=5
+            timeout=NETWORK_TIMEOUT
         )
 
         if response.status_code != 200:
@@ -415,7 +419,92 @@ def get_latest_pypi_version(package):
         requests.RequestException,
         ValueError
     ):
+
         return None
+
+
+# ============================================================
+# CHECK ONE DEPENDENCY
+# ============================================================
+
+def _check_single_dependency(
+    dependency,
+    ecosystem
+):
+    """
+    Check one dependency against the latest published version.
+    """
+
+    name = dependency.get("name")
+    current = dependency.get("version")
+
+    if (
+        not name
+        or not current
+        or current == "unspecified"
+    ):
+        return None
+
+    if ecosystem == "npm":
+
+        latest = get_latest_npm_version(
+            name
+        )
+
+    elif ecosystem == "PyPI":
+
+        latest = get_latest_pypi_version(
+            name
+        )
+
+    else:
+
+        return None
+
+    if not latest:
+        return None
+
+    current_version = parse_version(
+        current
+    )
+
+    latest_version = parse_version(
+        latest
+    )
+
+    if not (
+        current_version
+        and latest_version
+    ):
+        return None
+
+    if latest_version <= current_version:
+        return None
+
+    current_major = current_version[0]
+    current_minor = current_version[1]
+
+    latest_major = latest_version[0]
+    latest_minor = latest_version[1]
+
+    if latest_major > current_major:
+
+        severity = "HIGH"
+
+    elif latest_minor > current_minor:
+
+        severity = "MEDIUM"
+
+    else:
+
+        severity = "LOW"
+
+    return {
+        "name": name,
+        "current": current,
+        "latest": latest,
+        "severity": severity
+    }
 
 
 # ============================================================
@@ -427,111 +516,63 @@ def check_outdated_dependencies(
     ecosystem
 ):
     """
-    Check whether dependencies are behind the latest
-    published version.
+    Check dependencies for newer published versions.
 
-    This function is currently optional and can be used
-    later for dependency health recommendations.
+    Network requests are performed concurrently.
     """
 
     results = []
 
-    for dependency in dependencies:
+    if not dependencies:
+        return results
 
-        name = dependency.get(
-            "name"
-        )
+    checkable = [
 
-        current = dependency.get(
-            "version"
-        )
+        dependency
+
+        for dependency in dependencies
 
         if (
-            not name
-            or not current
-            or current == "unspecified"
-        ):
-            continue
-
-        # ----------------------------------------------------
-        # Get latest version
-        # ----------------------------------------------------
-
-        if ecosystem == "npm":
-
-            latest = get_latest_npm_version(
-                name
-            )
-
-        elif ecosystem == "PyPI":
-
-            latest = get_latest_pypi_version(
-                name
-            )
-
-        else:
-
-            latest = None
-
-        if not latest:
-            continue
-
-        # ----------------------------------------------------
-        # Parse versions
-        # ----------------------------------------------------
-
-        current_version = parse_version(
-            current
+            dependency.get("name")
+            and dependency.get("version")
+            and dependency.get("version") != "unspecified"
         )
+    ]
 
-        latest_version = parse_version(
-            latest
-        )
+    if not checkable:
+        return results
 
-        if not (
-            current_version
-            and latest_version
-        ):
-            continue
+    max_workers = min(
+        8,
+        len(checkable)
+    )
 
-        # ----------------------------------------------------
-        # Compare versions
-        # ----------------------------------------------------
+    with ThreadPoolExecutor(
+        max_workers=max_workers
+    ) as executor:
 
-        if latest_version > current_version:
+        futures = [
 
-            major_difference = (
-                latest_version[0]
-                > current_version[0]
+            executor.submit(
+                _check_single_dependency,
+                dependency,
+                ecosystem
             )
 
-            minor_difference = (
-                latest_version[1]
-                > current_version[1]
-            )
+            for dependency in checkable
+        ]
 
-            if major_difference:
+        for future in as_completed(futures):
 
-                severity = "HIGH"
+            try:
 
-            elif minor_difference:
+                result = future.result()
 
-                severity = "MEDIUM"
+                if result:
+                    results.append(result)
 
-            else:
+            except Exception:
 
-                severity = "LOW"
-
-            results.append({
-
-                "name": name,
-
-                "current": current,
-
-                "latest": latest,
-
-                "severity": severity
-
-            })
+                continue
 
     return results

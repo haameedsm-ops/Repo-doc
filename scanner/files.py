@@ -1,4 +1,6 @@
+
 from pathlib import Path
+import os
 
 
 # ============================================================
@@ -98,7 +100,12 @@ def scan_files(repo_path):
     Scan a repository efficiently.
 
     Only supported source files are returned.
-    Large files are skipped from expensive analysis.
+
+    Important:
+    - Ignored directories are skipped before recursion.
+    - Dependency/build/cache directories are never traversed.
+    - Only supported source extensions are collected.
+    - Files larger than MAX_SOURCE_FILE_SIZE are skipped.
     """
 
     repo = Path(repo_path)
@@ -115,51 +122,101 @@ def scan_files(repo_path):
 
     files = []
 
-    for file in repo.rglob("*"):
+    # --------------------------------------------------------
+    # Recursive directory scanner
+    # --------------------------------------------------------
 
-        if not file.is_file():
-            continue
-
-        # ----------------------------------------------------
-        # Ignore unnecessary directories
-        # ----------------------------------------------------
-
-        if any(
-            part in IGNORED_DIRECTORIES
-            for part in file.parts
-        ):
-            continue
-
-        # ----------------------------------------------------
-        # Ignore dependency lockfiles
-        # ----------------------------------------------------
-
-        if file.name in IGNORED_FILES:
-            continue
-
-        # ----------------------------------------------------
-        # Only collect supported source files
-        # ----------------------------------------------------
-
-        if file.suffix.lower() not in TEXT_EXTENSIONS:
-            continue
-
-        # ----------------------------------------------------
-        # Skip extremely large files
-        # ----------------------------------------------------
-
+    def scan_directory(directory):
         try:
-
-            if file.stat().st_size > MAX_SOURCE_FILE_SIZE:
-                continue
-
+            entries = os.scandir(directory)
         except (
             PermissionError,
             OSError
         ):
-            continue
+            return
 
-        files.append(file)
+        with entries:
+            for entry in entries:
+
+                try:
+
+                    # ------------------------------------------------
+                    # Directory
+                    # ------------------------------------------------
+
+                    if entry.is_dir(
+                        follow_symlinks=False
+                    ):
+
+                        if entry.name in IGNORED_DIRECTORIES:
+                            continue
+
+                        scan_directory(
+                            entry.path
+                        )
+
+                        continue
+
+                    # ------------------------------------------------
+                    # Ignore non-files
+                    # ------------------------------------------------
+
+                    if not entry.is_file(
+                        follow_symlinks=False
+                    ):
+                        continue
+
+                    # ------------------------------------------------
+                    # Ignore dependency lockfiles
+                    # ------------------------------------------------
+
+                    if entry.name in IGNORED_FILES:
+                        continue
+
+                    # ------------------------------------------------
+                    # Only supported source files
+                    # ------------------------------------------------
+
+                    extension = Path(
+                        entry.name
+                    ).suffix.lower()
+
+                    if extension not in TEXT_EXTENSIONS:
+                        continue
+
+                    # ------------------------------------------------
+                    # Skip extremely large files
+                    # ------------------------------------------------
+
+                    try:
+
+                        if (
+                            entry.stat(
+                                follow_symlinks=False
+                            ).st_size
+                            > MAX_SOURCE_FILE_SIZE
+                        ):
+                            continue
+
+                    except (
+                        PermissionError,
+                        OSError
+                    ):
+                        continue
+
+                    files.append(
+                        Path(entry.path)
+                    )
+
+                except (
+                    PermissionError,
+                    OSError
+                ):
+                    continue
+
+    scan_directory(
+        str(repo)
+    )
 
     return files
 
@@ -169,7 +226,9 @@ def scan_files(repo_path):
 # ============================================================
 
 def detect_languages(files):
-    """Detect programming languages from file extensions."""
+    """
+    Detect programming languages from file extensions.
+    """
 
     languages = {}
 
@@ -180,10 +239,16 @@ def detect_languages(files):
         if extension not in LANGUAGES:
             continue
 
-        language = LANGUAGES[extension]
+        language = LANGUAGES[
+            extension
+        ]
 
         languages[language] = (
-            languages.get(language, 0) + 1
+            languages.get(
+                language,
+                0
+            )
+            + 1
         )
 
     return languages

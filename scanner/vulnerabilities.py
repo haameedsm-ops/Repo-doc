@@ -1,3 +1,7 @@
+from pathlib import Path
+import json
+import time
+
 import requests
 
 
@@ -5,14 +9,95 @@ OSV_BATCH_API = "https://api.osv.dev/v1/querybatch"
 
 BATCH_SIZE = 100
 
+# Cache vulnerability results for 24 hours
+CACHE_TTL = 60 * 60 * 24
 
-def check_vulnerabilities_batch(dependencies, ecosystem="PyPI"):
+CACHE_FILE = (
+    Path(__file__).resolve().parent
+    / ".osv_cache.json"
+)
+
+
+# ============================================================
+# CACHE HELPERS
+# ============================================================
+
+def load_cache():
+    """
+    Load cached OSV vulnerability results.
+    """
+
+    if not CACHE_FILE.exists():
+        return {}
+
+    try:
+        data = json.loads(
+            CACHE_FILE.read_text(
+                encoding="utf-8"
+            )
+        )
+
+        if not isinstance(data, dict):
+            return {}
+
+        return data
+
+    except (
+        OSError,
+        json.JSONDecodeError
+    ):
+        return {}
+
+
+def save_cache(cache):
+    """
+    Save OSV vulnerability results locally.
+    """
+
+    try:
+        CACHE_FILE.write_text(
+            json.dumps(
+                cache,
+                indent=2
+            ),
+            encoding="utf-8"
+        )
+
+    except OSError:
+        pass
+
+
+def cache_key(name, version, ecosystem):
+    """
+    Generate a unique cache key.
+    """
+
+    return (
+        f"{ecosystem}:"
+        f"{name}:"
+        f"{version}"
+    )
+
+
+# ============================================================
+# BATCH VULNERABILITY SCAN
+# ============================================================
+
+def check_vulnerabilities_batch(
+    dependencies,
+    ecosystem="PyPI"
+):
     """
     Scan multiple dependencies using the OSV batch API.
 
+    Uses a local 24-hour cache to avoid repeatedly
+    querying the same package/version.
+
     Returns:
+
         {
-            (package_name, version): [vulnerability, ...]
+            (package_name, version):
+                [vulnerability, ...]
         }
     """
 
@@ -21,48 +106,46 @@ def check_vulnerabilities_batch(dependencies, ecosystem="PyPI"):
     if not dependencies:
         return results
 
+
     # ---------------------------------------------------------
-    # Prepare valid dependencies
+    # Load cache
     # ---------------------------------------------------------
 
-    packages = []
+    cache = load_cache()
 
-    for dependency in dependencies:
-
-        name = dependency.get("name")
-        version = dependency.get("version")
-
-        if not name:
-            continue
-
-        if not version or version == "unspecified":
-            continue
-
-        packages.append({
-            "name": name,
-            "version": version
-        })
-
-        results[(name, version)] = []
-
-
-    if not packages:
-        return results
+    now = time.time()
 
 
     # ---------------------------------------------------------
-    # Remove duplicate packages
+    # Prepare valid unique dependencies
     # ---------------------------------------------------------
 
     unique_packages = []
 
     seen = set()
 
-    for package in packages:
+    for dependency in dependencies:
+
+        name = dependency.get(
+            "name"
+        )
+
+        version = dependency.get(
+            "version"
+        )
+
+        if not name:
+            continue
+
+        if (
+            not version
+            or version == "unspecified"
+        ):
+            continue
 
         key = (
-            package["name"],
-            package["version"]
+            name,
+            version
         )
 
         if key in seen:
@@ -70,7 +153,80 @@ def check_vulnerabilities_batch(dependencies, ecosystem="PyPI"):
 
         seen.add(key)
 
-        unique_packages.append(package)
+        results[key] = []
+
+        unique_packages.append({
+            "name": name,
+            "version": version
+        })
+
+
+    if not unique_packages:
+        return results
+
+
+    # ---------------------------------------------------------
+    # Check local cache
+    # ---------------------------------------------------------
+
+    packages_to_scan = []
+
+    for package in unique_packages:
+
+        name = package["name"]
+        version = package["version"]
+
+        key = cache_key(
+            name,
+            version,
+            ecosystem
+        )
+
+        cached = cache.get(key)
+
+        if not cached:
+            packages_to_scan.append(
+                package
+            )
+            continue
+
+
+        cached_time = cached.get(
+            "timestamp",
+            0
+        )
+
+        # -----------------------------------------------------
+        # Cache still valid
+        # -----------------------------------------------------
+
+        if (
+            now - cached_time
+            < CACHE_TTL
+        ):
+
+            results[
+                (name, version)
+            ] = cached.get(
+                "vulnerabilities",
+                []
+            )
+
+        else:
+
+            # Cache expired
+            packages_to_scan.append(
+                package
+            )
+
+
+    # ---------------------------------------------------------
+    # Everything was cached
+    # ---------------------------------------------------------
+
+    if not packages_to_scan:
+
+        return results
 
 
     # ---------------------------------------------------------
@@ -79,11 +235,11 @@ def check_vulnerabilities_batch(dependencies, ecosystem="PyPI"):
 
     for start in range(
         0,
-        len(unique_packages),
+        len(packages_to_scan),
         BATCH_SIZE
     ):
 
-        batch = unique_packages[
+        batch = packages_to_scan[
             start:start + BATCH_SIZE
         ]
 
@@ -94,11 +250,15 @@ def check_vulnerabilities_batch(dependencies, ecosystem="PyPI"):
             queries.append({
 
                 "package": {
-                    "name": package["name"],
-                    "ecosystem": ecosystem
+                    "name":
+                        package["name"],
+
+                    "ecosystem":
+                        ecosystem
                 },
 
-                "version": package["version"]
+                "version":
+                    package["version"]
 
             })
 
@@ -111,13 +271,22 @@ def check_vulnerabilities_batch(dependencies, ecosystem="PyPI"):
         try:
 
             response = requests.post(
+
                 OSV_BATCH_API,
+
                 json=payload,
-                timeout=15
+
+                timeout=10
             )
 
 
             if response.status_code != 200:
+
+                print(
+                    f"⚠️ OSV API returned "
+                    f"HTTP {response.status_code}"
+                )
+
                 continue
 
 
@@ -130,7 +299,7 @@ def check_vulnerabilities_batch(dependencies, ecosystem="PyPI"):
 
 
             # -------------------------------------------------
-            # Match results back to packages
+            # Match results
             # -------------------------------------------------
 
             for package, result in zip(
@@ -138,17 +307,52 @@ def check_vulnerabilities_batch(dependencies, ecosystem="PyPI"):
                 batch_results
             ):
 
-                vulnerabilities = result.get(
-                    "vulns",
-                    []
+                vulnerabilities = (
+                    result.get(
+                        "vulns",
+                        []
+                    )
                 )
+
+                name = package[
+                    "name"
+                ]
+
+                version = package[
+                    "version"
+                ]
 
                 key = (
-                    package["name"],
-                    package["version"]
+                    name,
+                    version
                 )
 
-                results[key] = vulnerabilities
+                results[key] = (
+                    vulnerabilities
+                )
+
+
+                # -------------------------------------------------
+                # Save to cache
+                # -------------------------------------------------
+
+                cache_key_value = cache_key(
+                    name,
+                    version,
+                    ecosystem
+                )
+
+                cache[
+                    cache_key_value
+                ] = {
+
+                    "timestamp":
+                        now,
+
+                    "vulnerabilities":
+                        vulnerabilities
+
+                }
 
 
         except (
@@ -156,7 +360,19 @@ def check_vulnerabilities_batch(dependencies, ecosystem="PyPI"):
             ValueError
         ):
 
+            print(
+                "⚠️ OSV vulnerability "
+                "scan failed."
+            )
+
             continue
+
+
+    # ---------------------------------------------------------
+    # Save cache
+    # ---------------------------------------------------------
+
+    save_cache(cache)
 
 
     return results

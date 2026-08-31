@@ -1,121 +1,79 @@
 from pathlib import Path
+import json
 
 
 # ============================================================
-# DEFAULT LARGE FILE THRESHOLDS
+# DEFAULT CONFIGURATION
 # ============================================================
 
-DEFAULT_LARGE_FILE_THRESHOLDS = {
-    ".py": 500,
-    ".js": 800,
-    ".jsx": 800,
-    ".ts": 800,
-    ".tsx": 800,
-    ".css": 1200,
-    ".scss": 1200,
-    ".sass": 1200,
-    ".less": 1200,
-    ".html": 1000,
-    ".htm": 1000,
+DEFAULT_CONFIG = {
+    "thresholds": {
+        "python": 500,
+        "javascript": 800,
+        "css": 1200,
+        "html": 1000,
+    }
 }
 
-DEFAULT_MAX_FILE_LINES = 1000
-
 
 # ============================================================
-# CONFIGURATION LOADER
+# LOAD REPOSITORY CONFIGURATION
 # ============================================================
 
-def load_config(repository_path):
+def load_config(repo_path):
     """
-    Load Repo Doctor configuration.
+    Load Repo Doctor configuration from the repository.
 
-    If .repo-doctor.toml does not exist, default
-    thresholds are automatically used.
+    If .repo-doctor.json does not exist or is invalid,
+    safely fall back to default configuration.
     """
 
-    config_path = (
-        Path(repository_path)
-        / ".repo-doctor.toml"
-    )
+    config = DEFAULT_CONFIG.copy()
 
-    default_config = {
-        "large_file_thresholds":
-            DEFAULT_LARGE_FILE_THRESHOLDS.copy()
-    }
+    config_file = Path(repo_path) / ".repo-doctor.json"
 
-    if not config_path.exists():
-        return default_config
+    if not config_file.is_file():
+        return config
 
     try:
+        with config_file.open(
+            "r",
+            encoding="utf-8"
+        ) as file:
+            user_config = json.load(file)
 
-        import tomllib
-
-    except ModuleNotFoundError:
-
-        try:
-            import tomli as tomllib
-        except ModuleNotFoundError:
-            return default_config
-
-    try:
-
-        with config_path.open(
-            "rb"
-        ) as config_file:
-
-            data = tomllib.load(
-                config_file
-            )
-
-    except (OSError, ValueError, TypeError):
-
-        return default_config
-
-    quality_config = data.get(
-        "quality",
-        {}
-    )
-
-    configured = quality_config.get(
-        "large_files",
-        {}
-    )
-
-    thresholds = (
-        DEFAULT_LARGE_FILE_THRESHOLDS.copy()
-    )
-
-    extension_mapping = {
-        "python": [".py"],
-        "javascript": [".js", ".jsx"],
-        "typescript": [".ts", ".tsx"],
-        "css": [".css"],
-        "scss": [".scss"],
-        "sass": [".sass"],
-        "less": [".less"],
-        "html": [".html", ".htm"],
-    }
-
-    for file_type, extensions in (
-        extension_mapping.items()
+    except (
+        OSError,
+        json.JSONDecodeError
     ):
+        return config
 
-        if file_type not in configured:
-            continue
+    if not isinstance(user_config, dict):
+        return config
 
-        value = configured[file_type]
+    user_thresholds = user_config.get(
+        "thresholds",
+        {}
+    )
 
-        if not isinstance(value, int):
-            continue
+    if not isinstance(user_thresholds, dict):
+        return config
 
-        if value <= 0:
-            continue
+    # --------------------------------------------------------
+    # Validate individual thresholds
+    # --------------------------------------------------------
 
-        for extension in extensions:
+    for language in [
+        "python",
+        "javascript",
+        "css",
+        "html"
+    ]:
 
-            thresholds[extension] = value
+        value = user_thresholds.get(language)
 
-    return {
-        "large_file_thresholds": thresholds
-    }
+        if isinstance(value, int) and value > 0:
+
+            config["thresholds"][language] = value
+
+    return config

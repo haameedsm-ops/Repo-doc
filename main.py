@@ -19,7 +19,10 @@ from scanner.health import (
     calculate_security_score,
     calculate_quality_score,
     calculate_documentation_score,
-    calculate_overall_score
+    calculate_overall_score,
+    generate_diagnosis,
+    print_diagnosis,
+    print_quality_breakdown
 )
 
 from scanner.quality import (
@@ -450,9 +453,12 @@ security_score = calculate_security_score(
     all_security_findings
 )
 
-quality_score = calculate_quality_score(
+quality_result = calculate_quality_score(
     quality_findings
 )
+
+quality_score = quality_result["score"]
+quality_breakdown = quality_result["breakdown"]
 
 documentation_score = calculate_documentation_score(
     files
@@ -487,6 +493,53 @@ print(
     f"Lines of code: {lines}"
 )
 
+# ============================================================
+# REPO DOCTOR CONFIGURATION
+# ============================================================
+
+print(
+    "\n⚙️ REPO DOCTOR CONFIG"
+)
+
+print(
+    "-" * 40
+)
+
+config_file = repo / ".repo-doctor.json"
+
+if config_file.exists():
+    print(
+        "Configuration: .repo-doctor.json"
+    )
+else:
+    print(
+        "Configuration: Default thresholds"
+    )
+
+thresholds = config.get(
+    "thresholds",
+    {}
+)
+
+print(
+    f"Python threshold:     "
+    f"{thresholds.get('python', 500)}"
+)
+
+print(
+    f"JavaScript threshold: "
+    f"{thresholds.get('javascript', 800)}"
+)
+
+print(
+    f"CSS threshold:        "
+    f"{thresholds.get('css', 1200)}"
+)
+
+print(
+    f"HTML threshold:       "
+    f"{thresholds.get('html', 1000)}"
+)
 
 # ============================================================
 # PROJECT DNA
@@ -969,43 +1022,25 @@ print(
     f"{documentation_score}/100"
 )
 
-
-# ============================================================
-# FINAL STATUS
-# ============================================================
-
-print(
-    "\n🩺 DIAGNOSIS"
+print_quality_breakdown(
+    quality_score,
+    quality_findings
 )
 
-print(
-    "-" * 40
+
+# ============================================================
+# SMART DIAGNOSIS
+# ============================================================
+
+diagnosis = generate_diagnosis(
+    security_findings,
+    quality_findings,
+    dependency_results
 )
 
-if overall_score >= 90:
-
-    print(
-        "🟢 Excellent repository health."
-    )
-
-elif overall_score >= 75:
-
-    print(
-        "🟡 Good repository health."
-    )
-
-elif overall_score >= 50:
-
-    print(
-        "🟠 Repository needs attention."
-    )
-
-else:
-
-    print(
-        "🔴 Critical repository health issues detected."
-    )
-
+print_diagnosis(
+    diagnosis
+)
 
 # ============================================================
 # PERFORMANCE SUMMARY

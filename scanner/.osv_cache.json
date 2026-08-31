@@ -1,0 +1,193 @@
+{
+  "npm:react:19.2.8": {
+    "timestamp": 1788157303.0559413,
+    "vulnerabilities": []
+  },
+  "npm:react-dom:19.2.8": {
+    "timestamp": 1788157303.0559413,
+    "vulnerabilities": []
+  },
+  "npm:react-icons:5.7.0": {
+    "timestamp": 1788157303.0559413,
+    "vulnerabilities": []
+  },
+  "npm:@eslint/js:10.0.1": {
+    "timestamp": 1788157303.0559413,
+    "vulnerabilities": []
+  },
+  "npm:@types/react:19.2.17": {
+    "timestamp": 1788157303.0559413,
+    "vulnerabilities": []
+  },
+  "npm:@types/react-dom:19.2.3": {
+    "timestamp": 1788157303.0559413,
+    "vulnerabilities": []
+  },
+  "npm:@vitejs/plugin-react:6.0.4": {
+    "timestamp": 1788157303.0559413,
+    "vulnerabilities": []
+  },
+  "npm:eslint:10.8.0": {
+    "timestamp": 1788157303.0559413,
+    "vulnerabilities": []
+  },
+  "npm:eslint-plugin-react-hooks:7.1.1": {
+    "timestamp": 1788157303.0559413,
+    "vulnerabilities": []
+  },
+  "npm:eslint-plugin-react-refresh:0.5.3": {
+    "timestamp": 1788157303.0559413,
+    "vulnerabilities": []
+  },
+  "npm:globals:17.7.0": {
+    "timestamp": 1788157303.0559413,
+    "vulnerabilities": []
+  },
+  "npm:vite:8.2.0": {
+    "timestamp": 1788157303.0559413,
+    "vulnerabilities": []
+  },
+  "npm:concurrently:8.2.2": {
+    "timestamp": 1788157311.1320143,
+    "vulnerabilities": []
+  },
+  "npm:canvas-confetti:1.9.4": {
+    "timestamp": 1788157311.1320143,
+    "vulnerabilities": []
+  },
+  "npm:lucide-react:0.395.0": {
+    "timestamp": 1788157311.1320143,
+    "vulnerabilities": []
+  },
+  "npm:qrcode.react:3.1.0": {
+    "timestamp": 1788157311.1320143,
+    "vulnerabilities": []
+  },
+  "npm:react:18.3.1": {
+    "timestamp": 1788157311.1320143,
+    "vulnerabilities": []
+  },
+  "npm:react-dom:18.3.1": {
+    "timestamp": 1788157311.1320143,
+    "vulnerabilities": []
+  },
+  "npm:react-native-web:0.19.12": {
+    "timestamp": 1788157311.1320143,
+    "vulnerabilities": []
+  },
+  "npm:socket.io-client:4.7.5": {
+    "timestamp": 1788157311.1320143,
+    "vulnerabilities": []
+  },
+  "npm:@vitejs/plugin-react:4.3.1": {
+    "timestamp": 1788157311.1320143,
+    "vulnerabilities": []
+  },
+  "npm:vite:5.3.1": {
+    "timestamp": 1788157311.1320143,
+    "vulnerabilities": [
+      {
+        "id": "GHSA-356w-63v5-8wf4",
+        "modified": "2026-02-04T04:11:44.900383Z"
+      },
+      {
+        "id": "GHSA-4r4m-qw57-chr8",
+        "modified": "2026-02-04T04:37:24.129476Z"
+      },
+      {
+        "id": "GHSA-4w7w-66w2-5vf9",
+        "modified": "2026-04-09T14:59:24.646487Z"
+      },
+      {
+        "id": "GHSA-64vr-g452-qvp3",
+        "modified": "2026-02-04T04:04:22.977459Z"
+      },
+      {
+        "id": "GHSA-859w-5945-r5v3",
+        "modified": "2026-02-04T03:27:17.681639Z"
+      },
+      {
+        "id": "GHSA-93m4-6634-74q7",
+        "modified": "2026-02-04T04:13:38.886554Z"
+      },
+      {
+        "id": "GHSA-9cwx-2883-4wfx",
+        "modified": "2026-02-04T04:05:31.919291Z"
+      },
+      {
+        "id": "GHSA-c27g-q93r-2cwf",
+        "modified": "2026-06-06T18:29:26.567565Z"
+      },
+      {
+        "id": "GHSA-fx2h-pf6j-xcff",
+        "modified": "2026-07-15T22:30:44.486843Z"
+      },
+      {
+        "id": "GHSA-g4jq-h2w9-997c",
+        "modified": "2026-02-04T04:33:22.508417Z"
+      },
+      {
+        "id": "GHSA-jqfw-vq24-v9c3",
+        "modified": "2026-02-04T04:35:16.287471Z"
+      },
+      {
+        "id": "GHSA-v6wh-96g9-6wx3",
+        "modified": "2026-07-02T19:59:25.649988Z"
+      },
+      {
+        "id": "GHSA-vg6x-rcgg-rjx6",
+        "modified": "2026-02-04T04:37:03.076966Z"
+      },
+      {
+        "id": "GHSA-x574-m823-4x7w",
+        "modified": "2026-02-04T03:13:24.371631Z"
+      },
+      {
+        "id": "GHSA-xcj6-pq6g-qj4x",
+        "modified": "2026-02-04T03:51:38.412061Z"
+      }
+    ]
+  },
+  "npm:bcryptjs:3.0.3": {
+    "timestamp": 1788157311.1320143,
+    "vulnerabilities": []
+  },
+  "npm:cors:2.8.5": {
+    "timestamp": 1788157311.1320143,
+    "vulnerabilities": []
+  },
+  "npm:dotenv:16.4.5": {
+    "timestamp": 1788157311.1320143,
+    "vulnerabilities": []
+  },
+  "npm:express:4.19.2": {
+    "timestamp": 1788157311.1320143,
+    "vulnerabilities": [
+      {
+        "id": "GHSA-qw6h-vgh9-j6wx",
+        "modified": "2026-02-04T04:10:32.069920Z"
+      }
+    ]
+  },
+  "npm:firebase-admin:14.3.0": {
+    "timestamp": 1788157311.1320143,
+    "vulnerabilities": []
+  },
+  "npm:jsonwebtoken:9.0.2": {
+    "timestamp": 1788157311.1320143,
+    "vulnerabilities": []
+  },
+  "npm:socket.io:4.7.5": {
+    "timestamp": 1788157311.1320143,
+    "vulnerabilities": []
+  },
+  "npm:uuid:9.0.1": {
+    "timestamp": 1788157311.1320143,
+    "vulnerabilities": [
+      {
+        "id": "GHSA-w5hq-g745-h8pq",
+        "modified": "2026-07-08T08:11:13.328634Z"
+      }
+    ]
+  }
+}

@@ -1,31 +1,14 @@
+from __future__ import annotations
 
 import ast
 import re
-import hashlib
-
-from tree_sitter import Parser
-import tree_sitter_javascript
-
-
-# ============================================================
-# DEFAULT SETTINGS
-# ============================================================
-
-DEFAULT_MAX_FILE_LINES = 1000
-
-MAX_FUNCTION_LINES = 50
-MAX_JS_FUNCTION_LINES = 80
-
-JS_EXTENSIONS = {
-    ".js",
-    ".jsx",
-    ".ts",
-    ".tsx"
-}
+from collections import Counter
+from pathlib import Path
+from typing import Any
 
 
 # ============================================================
-# LARGE FILE THRESHOLDS
+# DEFAULT CONFIGURATION
 # ============================================================
 
 LARGE_FILE_THRESHOLDS = {
@@ -34,1770 +17,1527 @@ LARGE_FILE_THRESHOLDS = {
     ".jsx": 800,
     ".ts": 800,
     ".tsx": 800,
-
     ".css": 1200,
     ".scss": 1200,
     ".sass": 1200,
     ".less": 1200,
-
     ".html": 1000,
     ".htm": 1000,
 }
 
+DEFAULT_MAX_FILE_LINES = 1000
 
-# ============================================================
-# DUPLICATE CODE SETTINGS
-# ============================================================
+LONG_FUNCTION_LINES = 80
+
+PYTHON_COMPLEXITY_THRESHOLD = 10
+JAVASCRIPT_COMPLEXITY_THRESHOLD = 10
 
 DUPLICATE_MIN_LINES = 8
-DUPLICATE_CHUNK_LINES = 8
+DUPLICATE_SIMILARITY = 0.85
 
-# Maximum source lines considered for duplicate detection
-# Large files are still checked for large-file warnings.
-DUPLICATE_MAX_FILE_LINES = 5000
 
-# Maximum chunks generated from one file.
-# This prevents huge repositories from exploding in memory/time.
-DUPLICATE_MAX_CHUNKS_PER_FILE = 600
+# ============================================================
+# FILE CATEGORIES
+# ============================================================
 
-# Step between chunks.
-# Using 1 creates many overlapping chunks.
-# Using 4 is much faster while still finding meaningful duplication.
-DUPLICATE_CHUNK_STEP = 4
+TEST_PARTS = {
+    "test",
+    "tests",
+    "__tests__",
+    "__test__",
+}
 
-DUPLICATE_EXTENSIONS = {
-    ".py",
-    ".js",
-    ".jsx",
-    ".ts",
-    ".tsx",
-    ".css",
-    ".scss",
-    ".sass",
-    ".less",
-    ".html",
-    ".htm"
+GENERATED_PARTS = {
+    "dist",
+    "build",
+    "coverage",
+    ".next",
+    ".nuxt",
+    "generated",
+}
+
+CONFIG_NAMES = {
+    "vite.config.js",
+    "vite.config.ts",
+    "vite.config.mjs",
+    "webpack.config.js",
+    "webpack.config.ts",
+    "jest.config.js",
+    "jest.config.ts",
+    "eslint.config.js",
+    "eslint.config.mjs",
+    "prettier.config.js",
+    "prettier.config.cjs",
+    "tailwind.config.js",
+    "tailwind.config.ts",
 }
 
 
 # ============================================================
-# UNUSED CODE SETTINGS
+# LANGUAGE HELPERS
 # ============================================================
 
-UNUSED_CODE_EXTENSIONS = {
-    ".py",
-    ".js",
-    ".jsx",
-    ".ts",
-    ".tsx"
-}
-
-
-# ============================================================
-# BINARY FILES
-# ============================================================
-
-BINARY_EXTENSIONS = {
-    ".png",
-    ".jpg",
-    ".jpeg",
-    ".gif",
-    ".webp",
-    ".ico",
-    ".bmp",
-    ".mp4",
-    ".mp3",
-    ".woff",
-    ".woff2",
-    ".ttf",
-    ".zip",
-    ".pdf",
-    ".exe",
-    ".dll",
-    ".so",
-    ".bin"
-}
-
-
-# ============================================================
-# FILE READER
-# ============================================================
-
-def read_file(file):
-
-    try:
-        return file.read_text(
-            encoding="utf-8",
-            errors="ignore"
-        )
-
-    except (
-        PermissionError,
-        OSError
-    ):
-        return ""
-
-
-# ============================================================
-# FILE TYPE
-# ============================================================
-
-def _get_file_type(file):
+def _get_file_type(file: Path) -> str:
+    """Return a human-readable file type."""
 
     extension = file.suffix.lower()
 
-    file_types = {
+    mapping = {
         ".py": "Python",
         ".js": "JavaScript",
-        ".jsx": "JavaScript JSX",
+        ".jsx": "JavaScript",
         ".ts": "TypeScript",
-        ".tsx": "TypeScript JSX",
+        ".tsx": "TypeScript",
         ".css": "CSS",
         ".scss": "SCSS",
         ".sass": "Sass",
-        ".less": "Less",
+        ".less": "LESS",
         ".html": "HTML",
         ".htm": "HTML",
     }
 
-    return file_types.get(
+    return mapping.get(
         extension,
-        extension.lstrip(".").upper() or "Unknown"
+        extension.lstrip(".").upper() or "Unknown",
     )
 
-
-# ============================================================
-# LARGE FILE THRESHOLD
-# ============================================================
 
 def _get_file_line_threshold(
-    file,
-    config=None
-):
+    file: Path,
+    config: dict[str, Any] | None = None,
+) -> int:
+    """
+    Return the configured line threshold for a file.
 
-    if config is None:
-        config = {}
+    Priority:
 
-    thresholds = config.get(
-        "large_file_thresholds",
-        {}
+    1. Repository .repo-doctor.json threshold
+    2. Extension-specific default
+    3. Global default
+    """
+
+    suffix = file.suffix.lower()
+
+    # --------------------------------------------------------
+    # Repository configuration
+    # --------------------------------------------------------
+
+    if config:
+        thresholds = config.get("thresholds", {})
+
+        if isinstance(thresholds, dict):
+            language = _get_file_type(file)
+
+            language_key = {
+                "Python": "python",
+                "JavaScript": "javascript",
+                "TypeScript": "javascript",
+                "CSS": "css",
+                "SCSS": "css",
+                "Sass": "css",
+                "LESS": "css",
+                "HTML": "html",
+            }.get(language)
+
+            if language_key:
+                custom_threshold = thresholds.get(language_key)
+
+                if (
+                    isinstance(custom_threshold, int)
+                    and not isinstance(custom_threshold, bool)
+                    and custom_threshold > 0
+                ):
+                    return custom_threshold
+
+    # --------------------------------------------------------
+    # Extension defaults
+    # --------------------------------------------------------
+
+    return LARGE_FILE_THRESHOLDS.get(
+        suffix,
+        DEFAULT_MAX_FILE_LINES,
     )
 
-    extension = file.suffix.lower()
 
-    # Config has priority
-    if extension in thresholds:
-        return thresholds[extension]
+def _get_file_category(file: Path) -> str:
+    """
+    Classify a source file.
 
-    # Built-in language-specific threshold
-    if extension in LARGE_FILE_THRESHOLDS:
-        return LARGE_FILE_THRESHOLDS[extension]
+    Categories:
 
-    return DEFAULT_MAX_FILE_LINES
+        source
+        test
+        generated
+        config
+    """
+
+    parts = {
+        part.lower()
+        for part in file.parts
+    }
+
+    name = file.name.lower()
+
+    # --------------------------------------------------------
+    # Test files
+    # --------------------------------------------------------
+
+    if parts.intersection(TEST_PARTS):
+        return "test"
+
+    if (
+        ".test." in name
+        or ".spec." in name
+        or name.endswith("_test.py")
+        or name.startswith("test_")
+    ):
+        return "test"
+
+    # --------------------------------------------------------
+    # Generated files
+    # --------------------------------------------------------
+
+    if parts.intersection(GENERATED_PARTS):
+        return "generated"
+
+    # --------------------------------------------------------
+    # Configuration files
+    # --------------------------------------------------------
+
+    if name in CONFIG_NAMES:
+        return "config"
+
+    return "source"
 
 
 # ============================================================
-# LARGE FILE SEVERITY
+# SEVERITY
 # ============================================================
 
 def _get_large_file_severity(
-    line_count,
-    threshold
-):
+    line_count: int,
+    threshold: int,
+) -> str:
+    """Calculate severity based on file size."""
 
     if threshold <= 0:
         return "HIGH"
 
     ratio = line_count / threshold
 
-    if ratio >= 4:
+    if ratio >= 3:
         return "HIGH"
 
-    if ratio >= 2:
+    if ratio >= 1.75:
         return "MEDIUM"
 
     return "LOW"
 
 
 # ============================================================
-# LARGE FILE CHECK
+# SAFE FILE READING
+# ============================================================
+
+def _read_file(file: Path) -> str:
+    """Read a source file safely."""
+
+    try:
+        return file.read_text(
+            encoding="utf-8",
+            errors="ignore",
+        )
+    except (OSError, UnicodeError):
+        return ""
+
+
+def _line_count(text: str) -> int:
+    """Count source lines."""
+
+    if not text:
+        return 0
+
+    return len(text.splitlines())
+
+
+# ============================================================
+# LARGE FILE DETECTION
 # ============================================================
 
 def check_large_files(
-    files,
-    config=None
-):
+    files: list[Path],
+    config: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    """
+    Detect files exceeding language-specific thresholds.
+
+    Generated files are ignored.
+    """
 
     findings = []
 
-    if config is None:
-        config = {}
-
     for file in files:
 
-        if file.suffix.lower() in BINARY_EXTENSIONS:
+        category = _get_file_category(file)
+
+        if category == "generated":
             continue
 
-        content = read_file(file)
+        text = _read_file(file)
 
-        if not content:
+        if not text:
             continue
 
-        line_count = len(
-            content.splitlines()
-        )
+        lines = _line_count(text)
 
         threshold = _get_file_line_threshold(
             file,
-            config
+            config,
         )
 
-        if threshold <= 0:
+        if lines <= threshold:
             continue
 
-        if line_count <= threshold:
-            continue
-
-        file_type = _get_file_type(file)
-
-        percentage_over = (
-            (line_count - threshold)
+        over_percentage = (
+            (lines - threshold)
             / threshold
             * 100
         )
 
         severity = _get_large_file_severity(
-            line_count,
-            threshold
+            lines,
+            threshold,
         )
 
-        if severity == "HIGH":
-
-            recommendation = (
-                f"This {file_type} file is extremely "
-                "large. Split it into smaller focused "
-                "modules, components, or stylesheets."
-            )
-
-        elif severity == "MEDIUM":
-
-            recommendation = (
-                f"Consider splitting this {file_type} "
-                "file into smaller focused modules "
-                "or components."
-            )
-
-        else:
-
-            recommendation = (
-                f"Consider gradually splitting this "
-                f"{file_type} file into smaller "
-                "focused sections."
-            )
+        file_type = _get_file_type(file)
 
         findings.append({
-
             "type": "Large File",
-
             "file": str(file),
-
+            "severity": severity,
+            "priority": severity,
+            "confidence": 100,
+            "lines": lines,
+            "threshold": threshold,
+            "over_percentage": round(
+                over_percentage,
+                1,
+            ),
             "details": (
                 f"Type: {file_type} | "
-                f"Lines: {line_count} | "
+                f"Lines: {lines} | "
                 f"Threshold: {threshold} | "
                 f"Over threshold: "
-                f"{percentage_over:.1f}%"
+                f"{over_percentage:.1f}%"
             ),
-
-            "severity": severity,
-
             "why": (
                 f"This {file_type} file contains "
-                f"{line_count} lines, exceeding the "
+                f"{lines} lines, exceeding the "
                 f"recommended {threshold}-line "
-                "threshold. Large files are harder "
-                "to navigate, maintain, test and "
-                "review."
+                f"threshold. Large files are harder "
+                f"to navigate, maintain, test and review."
             ),
-
-            "recommendation": recommendation,
-
-            "priority": severity
-
+            "recommendation": (
+                "Consider splitting this file into "
+                "smaller focused modules or components."
+            ),
         })
 
     return findings
 
 
 # ============================================================
-# TODO / FIXME CHECK
+# PYTHON AST HELPERS
 # ============================================================
 
-def check_todos(files):
+def _parse_python(
+    file: Path,
+    text: str,
+) -> ast.AST | None:
+    """Parse Python safely."""
 
-    findings = []
-
-    for file in files:
-
-        content = read_file(file)
-
-        if not content:
-            continue
-
-        for line_number, line in enumerate(
-            content.splitlines(),
-            start=1
-        ):
-
-            upper_line = line.upper()
-
-            if (
-                "TODO" in upper_line
-                or "FIXME" in upper_line
-            ):
-
-                findings.append({
-
-                    "type": "TODO/FIXME",
-
-                    "file": str(file),
-
-                    "line": line_number,
-
-                    "details": line.strip(),
-
-                    "severity": "LOW",
-
-                    "why": (
-                        "TODO/FIXME markers usually "
-                        "indicate unfinished or "
-                        "deferred work."
-                    ),
-
-                    "recommendation": (
-                        "Resolve the task, convert it "
-                        "into a tracked issue, or remove "
-                        "the marker."
-                    ),
-
-                    "priority": "LOW"
-
-                })
-
-    return findings
+    try:
+        return ast.parse(
+            text,
+            filename=str(file),
+        )
+    except (
+        SyntaxError,
+        ValueError,
+        TypeError,
+    ):
+        return None
 
 
-# ============================================================
-# PYTHON LONG FUNCTIONS
-# ============================================================
+def _python_imports(
+    tree: ast.AST,
+) -> list[tuple[str, int]]:
+    """Collect imported symbols and line numbers."""
 
-def check_long_functions(files):
+    imports = []
 
-    findings = []
+    for node in ast.walk(tree):
 
-    for file in files:
+        if isinstance(node, ast.Import):
 
-        if file.suffix.lower() != ".py":
-            continue
+            for alias in node.names:
 
-        content = read_file(file)
-
-        if not content:
-            continue
-
-        try:
-            tree = ast.parse(content)
-
-        except SyntaxError:
-            continue
-
-        for node in ast.walk(tree):
-
-            if isinstance(
-                node,
-                (
-                    ast.FunctionDef,
-                    ast.AsyncFunctionDef
-                )
-            ):
-
-                start = node.lineno
-
-                end = getattr(
-                    node,
-                    "end_lineno",
-                    start
+                name = (
+                    alias.asname
+                    or alias.name.split(".")[0]
                 )
 
-                length = (
-                    end
-                    - start
-                    + 1
-                )
-
-                if length > MAX_FUNCTION_LINES:
-
-                    findings.append({
-
-                        "type": "Long Function",
-
-                        "file": str(file),
-
-                        "function": node.name,
-
-                        "line": start,
-
-                        "details": f"{length} lines",
-
-                        "severity": "MEDIUM",
-
-                        "why": (
-                            "Long functions often handle "
-                            "multiple responsibilities."
-                        ),
-
-                        "recommendation": (
-                            "Break the function into smaller "
-                            "single-purpose helper functions."
-                        ),
-
-                        "priority": "MEDIUM"
-
-                    })
-
-    return findings
-
-
-# ============================================================
-# PYTHON COMPLEXITY
-# ============================================================
-
-def calculate_function_complexity(
-    function_node
-):
-
-    complexity = 1
-
-    for node in ast.walk(function_node):
-
-        if isinstance(
-            node,
-            (
-                ast.If,
-                ast.For,
-                ast.While,
-                ast.AsyncFor,
-                ast.ExceptHandler,
-                ast.With,
-                ast.AsyncWith
-            )
-        ):
-
-            complexity += 1
-
-        elif isinstance(
-            node,
-            ast.BoolOp
-        ):
-
-            complexity += (
-                len(node.values) - 1
-            )
-
-    return complexity
-
-
-def analyze_python_complexity(files):
-
-    findings = []
-
-    for file in files:
-
-        if file.suffix.lower() != ".py":
-            continue
-
-        content = read_file(file)
-
-        if not content:
-            continue
-
-        try:
-            tree = ast.parse(content)
-
-        except SyntaxError:
-            continue
-
-        for node in ast.walk(tree):
-
-            if isinstance(
-                node,
-                (
-                    ast.FunctionDef,
-                    ast.AsyncFunctionDef
-                )
-            ):
-
-                complexity = (
-                    calculate_function_complexity(
-                        node
+                imports.append(
+                    (
+                        name,
+                        node.lineno,
                     )
                 )
 
-                if complexity >= 10:
-
-                    findings.append({
-
-                        "type": "High Complexity",
-
-                        "file": str(file),
-
-                        "function": node.name,
-
-                        "line": node.lineno,
-
-                        "details": (
-                            f"Complexity: "
-                            f"{complexity}"
-                        ),
-
-                        "severity": "HIGH",
-
-                        "why": (
-                            "Many decision paths make "
-                            "the function harder to "
-                            "test and maintain."
-                        ),
-
-                        "recommendation": (
-                            "Split complex logic into "
-                            "smaller functions and "
-                            "simplify conditions."
-                        ),
-
-                        "priority": "HIGH"
-
-                    })
-
-                elif complexity >= 6:
-
-                    findings.append({
-
-                        "type": "Moderate Complexity",
-
-                        "file": str(file),
-
-                        "function": node.name,
-
-                        "line": node.lineno,
-
-                        "details": (
-                            f"Complexity: "
-                            f"{complexity}"
-                        ),
-
-                        "severity": "MEDIUM",
-
-                        "why": (
-                            "The function contains "
-                            "several decision paths."
-                        ),
-
-                        "recommendation": (
-                            "Consider extracting "
-                            "conditional logic into "
-                            "helper functions."
-                        ),
-
-                        "priority": "MEDIUM"
-
-                    })
-
-    return findings
-
-
-# ============================================================
-# TREE-SITTER JAVASCRIPT PARSER
-# ============================================================
-
-def _create_javascript_parser():
-
-    parser = Parser()
-
-    parser.language = (
-        tree_sitter_javascript.language()
-    )
-
-    return parser
-
-
-# ============================================================
-# TREE-SITTER FUNCTION DETECTION
-# ============================================================
-
-def _find_tree_sitter_functions(
-    content
-):
-
-    parser = _create_javascript_parser()
-
-    source = content.encode(
-        "utf-8",
-        errors="ignore"
-    )
-
-    tree = parser.parse(source)
-
-    functions = []
-
-    function_node_types = {
-        "function_declaration",
-        "function",
-        "arrow_function",
-        "method_definition"
-    }
-
-    def walk(node):
-
-        if node.type in function_node_types:
-            functions.append(node)
-
-        for child in node.children:
-            walk(child)
-
-    walk(tree.root_node)
-
-    return tree, functions
-
-
-# ============================================================
-# TREE-SITTER FUNCTION NAME
-# ============================================================
-
-def _get_function_name(
-    node,
-    source
-):
-
-    parent = node.parent
-
-    if node.type == "function_declaration":
-
-        name_node = node.child_by_field_name(
-            "name"
-        )
-
-        if name_node:
-
-            return source[
-                name_node.start_byte:
-                name_node.end_byte
-            ].decode(
-                "utf-8",
-                errors="ignore"
-            )
-
-    if parent:
-
-        if parent.type in {
-            "variable_declarator",
-            "pair"
-        }:
-
-            name_node = (
-                parent.child_by_field_name(
-                    "name"
-                )
-            )
-
-            if name_node:
-
-                return source[
-                    name_node.start_byte:
-                    name_node.end_byte
-                ].decode(
-                    "utf-8",
-                    errors="ignore"
-                )
-
-    if node.type == "method_definition":
-
-        name_node = node.child_by_field_name(
-            "name"
-        )
-
-        if name_node:
-
-            return source[
-                name_node.start_byte:
-                name_node.end_byte
-            ].decode(
-                "utf-8",
-                errors="ignore"
-            )
-
-    return "Anonymous Function"
-
-
-# ============================================================
-# TREE-SITTER COMPLEXITY
-# ============================================================
-
-def calculate_tree_sitter_complexity(
-    node
-):
-
-    complexity = 1
-
-    decision_nodes = {
-        "if_statement",
-        "for_statement",
-        "for_in_statement",
-        "while_statement",
-        "do_statement",
-        "switch_case",
-        "catch_clause",
-        "ternary_expression"
-    }
-
-    logical_nodes = {
-        "&&",
-        "||",
-        "??"
-    }
-
-    def walk(current):
-
-        nonlocal complexity
-
-        if current is not node:
-
-            if current.type in decision_nodes:
-                complexity += 1
-
-            elif current.type in logical_nodes:
-                complexity += 1
-
-        for child in current.children:
-            walk(child)
-
-    walk(node)
-
-    return complexity
-
-
-# ============================================================
-# JAVASCRIPT QUALITY ANALYSIS
-# ============================================================
-
-def analyze_javascript_quality(files):
-
-    findings = []
-
-    for file in files:
-
-        if file.suffix.lower() not in JS_EXTENSIONS:
-            continue
-
-        content = read_file(file)
-
-        if not content:
-            continue
-
-        source = content.encode(
-            "utf-8",
-            errors="ignore"
-        )
-
-        try:
-
-            tree, functions = (
-                _find_tree_sitter_functions(
-                    content
-                )
-            )
-
-        except Exception:
-            continue
-
-        for node in functions:
-
-            name = _get_function_name(
-                node,
-                source
-            )
-
-            start_line = (
-                node.start_point[0] + 1
-            )
-
-            end_line = (
-                node.end_point[0] + 1
-            )
-
-            length = (
-                end_line
-                - start_line
-                + 1
-            )
-
-            complexity = (
-                calculate_tree_sitter_complexity(
-                    node
-                )
-            )
-
-            # ------------------------------------------------
-            # COMBINED LONG + COMPLEX
-            # ------------------------------------------------
-
-            if (
-                length > MAX_JS_FUNCTION_LINES
-                and complexity >= 20
-            ):
-
-                findings.append({
-
-                    "type":
-                        "Complex & Long JavaScript Function",
-
-                    "file":
-                        str(file),
-
-                    "function":
-                        name,
-
-                    "line":
-                        start_line,
-
-                    "details": (
-                        f"Length: {length} lines | "
-                        f"Estimated complexity: "
-                        f"{complexity}"
-                    ),
-
-                    "severity":
-                        "HIGH",
-
-                    "why": (
-                        "This JavaScript function is "
-                        "both unusually long and "
-                        "highly complex, making it "
-                        "harder to test, understand "
-                        "and maintain."
-                    ),
-
-                    "recommendation": (
-                        "Split the function into smaller "
-                        "single-purpose functions, "
-                        "simplify conditional logic, "
-                        "and move reusable business "
-                        "logic into dedicated modules."
-                    ),
-
-                    "priority":
-                        "HIGH"
-
-                })
-
-                continue
-
-            # ------------------------------------------------
-            # LONG FUNCTION
-            # ------------------------------------------------
-
-            if length > MAX_JS_FUNCTION_LINES:
-
-                findings.append({
-
-                    "type":
-                        "Long JavaScript Function",
-
-                    "file":
-                        str(file),
-
-                    "function":
-                        name,
-
-                    "line":
-                        start_line,
-
-                    "details":
-                        f"{length} lines",
-
-                    "severity":
-                        "MEDIUM",
-
-                    "why": (
-                        "Large JavaScript functions "
-                        "often contain multiple "
-                        "responsibilities."
-                    ),
-
-                    "recommendation": (
-                        "Extract reusable logic into "
-                        "smaller helper functions or "
-                        "components."
-                    ),
-
-                    "priority":
-                        "MEDIUM"
-
-                })
-
-            # ------------------------------------------------
-            # HIGH COMPLEXITY
-            # ------------------------------------------------
-
-            if complexity >= 20:
-
-                findings.append({
-
-                    "type":
-                        "High JavaScript Complexity",
-
-                    "file":
-                        str(file),
-
-                    "function":
-                        name,
-
-                    "line":
-                        start_line,
-
-                    "details": (
-                        "Estimated complexity: "
-                        f"{complexity}"
-                    ),
-
-                    "severity":
-                        "HIGH",
-
-                    "why": (
-                        "High branching and "
-                        "conditional logic creates "
-                        "many possible execution paths."
-                    ),
-
-                    "recommendation": (
-                        "Split the function into smaller "
-                        "functions, simplify conditions, "
-                        "and move business logic into "
-                        "dedicated helper modules."
-                    ),
-
-                    "priority":
-                        "HIGH"
-
-                })
-
-            elif complexity >= 10:
-
-                findings.append({
-
-                    "type":
-                        "Moderate JavaScript Complexity",
-
-                    "file":
-                        str(file),
-
-                    "function":
-                        name,
-
-                    "line":
-                        start_line,
-
-                    "details": (
-                        "Estimated complexity: "
-                        f"{complexity}"
-                    ),
-
-                    "severity":
-                        "MEDIUM",
-
-                    "why": (
-                        "The function contains several "
-                        "conditional execution paths."
-                    ),
-
-                    "recommendation": (
-                        "Consider simplifying conditions "
-                        "or extracting complex logic into "
-                        "helper functions."
-                    ),
-
-                    "priority":
-                        "MEDIUM"
-
-                })
-
-    return findings
-
-
-# ============================================================
-# NORMALIZE CODE LINE
-# ============================================================
-
-def _normalize_code_line(line):
-
-    line = line.strip()
-
-    if not line:
-        return ""
-
-    # Python comments
-    if line.startswith("#"):
-        return ""
-
-    # JavaScript comments
-    if line.startswith("//"):
-        return ""
-
-    # CSS / HTML comment-only lines
-    if (
-        line.startswith("/*")
-        and line.endswith("*/")
-    ):
-        return ""
-
-    # Remove inline comments approximately
-    line = re.sub(
-        r"\s+(#|//).*$",
-        "",
-        line
-    )
-
-    # Normalize whitespace
-    line = re.sub(
-        r"\s+",
-        " ",
-        line
-    )
-
-    return line.strip()
-
-
-# ============================================================
-# NORMALIZE CODE
-# ============================================================
-
-def _normalize_code(content):
-
-    normalized_lines = []
-
-    for line in content.splitlines():
-
-        normalized = _normalize_code_line(
-            line
-        )
-
-        if normalized:
-
-            normalized_lines.append(
-                normalized
-            )
-
-    return normalized_lines
-
-
-# ============================================================
-# CREATE CODE CHUNKS
-# ============================================================
-
-def _create_code_chunks(lines):
-
-    chunks = []
-
-    if len(lines) < DUPLICATE_MIN_LINES:
-        return chunks
-
-    chunk_size = DUPLICATE_CHUNK_LINES
-
-    # --------------------------------------------------------
-    # Limit how much work is done on huge files
-    # --------------------------------------------------------
-
-    max_start = (
-        len(lines)
-        - chunk_size
-        + 1
-    )
-
-    step = DUPLICATE_CHUNK_STEP
-
-    positions = range(
-        0,
-        max_start,
-        step
-    )
-
-    for start in positions:
-
-        if len(chunks) >= DUPLICATE_MAX_CHUNKS_PER_FILE:
-            break
-
-        chunk = lines[
-            start:
-            start + chunk_size
-        ]
-
-        if len(chunk) < chunk_size:
-            continue
-
-        chunks.append(
-            (
-                start,
-                chunk
-            )
-        )
-
-    return chunks
-
-
-# ============================================================
-# HASH CHUNK
-# ============================================================
-
-def _hash_chunk(chunk):
-
-    normalized = "\n".join(chunk)
-
-    return hashlib.sha256(
-        normalized.encode(
-            "utf-8",
-            errors="ignore"
-        )
-    ).hexdigest()
-
-
-# ============================================================
-# DUPLICATE SEVERITY
-# ============================================================
-
-def _duplicate_severity(
-    line_count,
-    similarity
-):
-
-    if (
-        similarity >= 95
-        and line_count >= 20
-    ):
-        return "HIGH"
-
-    if (
-        similarity >= 85
-        and line_count >= 12
-    ):
-        return "MEDIUM"
-
-    return "LOW"
-
-
-# ============================================================
-# DUPLICATE CODE DETECTION
-# ============================================================
-
-def check_duplicate_code(files):
-
-    findings = []
-
-    chunk_index = {}
-
-    # --------------------------------------------------------
-    # BUILD CHUNK INDEX
-    # --------------------------------------------------------
-
-    for file in files:
-
-        extension = file.suffix.lower()
-
-        if extension not in DUPLICATE_EXTENSIONS:
-            continue
-
-        if extension in BINARY_EXTENSIONS:
-            continue
-
-        content = read_file(file)
-
-        if not content:
-            continue
-
-        normalized_lines = _normalize_code(
-            content
-        )
-
-        if len(normalized_lines) < DUPLICATE_MIN_LINES:
-            continue
-
-        # ----------------------------------------------------
-        # Important performance protection
-        # ----------------------------------------------------
-
-        if len(normalized_lines) > DUPLICATE_MAX_FILE_LINES:
-
-            # Sample the beginning, middle and end
-            # instead of processing the entire file.
-            third = DUPLICATE_MAX_FILE_LINES // 3
-
-            normalized_lines = (
-                normalized_lines[:third]
-                +
-                normalized_lines[
-                    len(normalized_lines) // 2 - third // 2:
-                    len(normalized_lines) // 2 + third // 2
-                ]
-                +
-                normalized_lines[-third:]
-            )
-
-        chunks = _create_code_chunks(
-            normalized_lines
-        )
-
-        for start, chunk in chunks:
-
-            chunk_hash = _hash_chunk(
-                chunk
-            )
-
-            chunk_index.setdefault(
-                chunk_hash,
-                []
-            ).append({
-
-                "file": file,
-
-                "start": start,
-
-                "lines": chunk
-
-            })
-
-    # --------------------------------------------------------
-    # FIND DUPLICATE CHUNKS
-    # --------------------------------------------------------
-
-    reported_pairs = set()
-
-    for chunk_hash, matches in chunk_index.items():
-
-        if len(matches) < 2:
-            continue
-
-        # ----------------------------------------------------
-        # Limit comparisons for extremely repeated chunks
-        # ----------------------------------------------------
-
-        if len(matches) > 20:
-            matches = matches[:20]
-
-        for i in range(
-            len(matches)
-        ):
-
-            for j in range(
-                i + 1,
-                len(matches)
-            ):
-
-                first = matches[i]
-                second = matches[j]
-
-                first_file = str(
-                    first["file"]
-                )
-
-                second_file = str(
-                    second["file"]
-                )
-
-                # Same file is ignored
-                if first_file == second_file:
-                    continue
-
-                pair = tuple(
-                    sorted([
-                        (
-                            first_file,
-                            first["start"]
-                        ),
-                        (
-                            second_file,
-                            second["start"]
-                        )
-                    ])
-                )
-
-                if pair in reported_pairs:
-                    continue
-
-                reported_pairs.add(pair)
-
-                similarity = 100.0
-
-                line_count = (
-                    DUPLICATE_CHUNK_LINES
-                )
-
-                severity = _duplicate_severity(
-                    line_count,
-                    similarity
-                )
-
-                first_start = (
-                    first["start"] + 1
-                )
-
-                first_end = (
-                    first_start
-                    + line_count
-                    - 1
-                )
-
-                second_start = (
-                    second["start"] + 1
-                )
-
-                second_end = (
-                    second_start
-                    + line_count
-                    - 1
-                )
-
-                findings.append({
-
-                    "type":
-                        "Duplicate Code",
-
-                    "file":
-                        first_file,
-
-                    "file_2":
-                        second_file,
-
-                    "line":
-                        first_start,
-
-                    "line_2":
-                        second_start,
-
-                    "details": (
-                        "Similarity: 100% | "
-                        f"Lines: {line_count} | "
-                        f"Range 1: "
-                        f"{first_start}-{first_end} | "
-                        f"Range 2: "
-                        f"{second_start}-{second_end}"
-                    ),
-
-                    "severity":
-                        severity,
-
-                    "why": (
-                        "Very similar code appears "
-                        "in multiple files. Duplicated "
-                        "logic increases maintenance "
-                        "cost and can cause inconsistent "
-                        "bug fixes."
-                    ),
-
-                    "recommendation": (
-                        "Extract the shared logic into "
-                        "a reusable function, component, "
-                        "utility, or shared stylesheet."
-                    ),
-
-                    "priority":
-                        severity
-
-                })
-
-    return findings
-
-
-# ============================================================
-# PYTHON UNUSED IMPORT DETECTION
-# ============================================================
-
-def check_unused_python_imports(files):
-
-    findings = []
-
-    for file in files:
-
-        if file.suffix.lower() != ".py":
-            continue
-
-        content = read_file(file)
-
-        if not content:
-            continue
-
-        try:
-            tree = ast.parse(content)
-
-        except SyntaxError:
-            continue
-
-        used_names = set()
-        imported_nodes = []
-
-        for node in ast.walk(tree):
-
-            if isinstance(
-                node,
-                ast.Name
-            ):
-
-                used_names.add(
-                    node.id
-                )
-
-            elif isinstance(
-                node,
-                (
-                    ast.Import,
-                    ast.ImportFrom
-                )
-            ):
-
-                imported_nodes.append(node)
-
-        for node in imported_nodes:
+        elif isinstance(node, ast.ImportFrom):
 
             for alias in node.names:
 
                 if alias.name == "*":
                     continue
 
-                if alias.asname:
-                    imported_name = alias.asname
+                name = (
+                    alias.asname
+                    or alias.name
+                )
 
-                else:
-                    imported_name = (
-                        alias.name.split(".")[0]
-                    )
-
-                if imported_name in used_names:
-                    continue
-
-                findings.append({
-
-                    "type":
-                        "Unused Python Import",
-
-                    "file":
-                        str(file),
-
-                    "line":
+                imports.append(
+                    (
+                        name,
                         node.lineno,
+                    )
+                )
 
-                    "details": (
-                        f"Unused import: "
-                        f"{alias.name}"
-                    ),
+    return imports
 
-                    "severity":
-                        "LOW",
 
-                    "why": (
-                        "This imported module or "
-                        "symbol does not appear to "
-                        "be used in the file."
-                    ),
+def _python_unused_imports(
+    tree: ast.AST,
+) -> list[tuple[str, int]]:
+    """Find Python imports that are never referenced."""
 
-                    "recommendation": (
-                        "Remove the unused import to "
-                        "reduce clutter and improve "
-                        "code maintainability."
-                    ),
+    imports = _python_imports(tree)
 
-                    "priority":
-                        "LOW"
+    if not imports:
+        return []
 
-                })
+    used_names = set()
+
+    for node in ast.walk(tree):
+
+        if isinstance(node, ast.Name):
+            used_names.add(node.id)
+
+    unused = []
+
+    for name, line in imports:
+
+        if name not in used_names:
+            unused.append(
+                (
+                    name,
+                    line,
+                )
+            )
+
+    return unused
+
+
+# ============================================================
+# PYTHON COMPLEXITY
+# ============================================================
+
+def _calculate_python_complexity(
+    node: ast.AST,
+) -> int:
+    """
+    Approximate cyclomatic complexity.
+    """
+
+    complexity = 1
+
+    for child in ast.walk(node):
+
+        if isinstance(
+            child,
+            (
+                ast.If,
+                ast.For,
+                ast.AsyncFor,
+                ast.While,
+                ast.IfExp,
+                ast.ExceptHandler,
+                ast.With,
+                ast.AsyncWith,
+                ast.Assert,
+            ),
+        ):
+            complexity += 1
+
+        elif isinstance(child, ast.BoolOp):
+
+            complexity += max(
+                0,
+                len(child.values) - 1,
+            )
+
+        elif isinstance(child, ast.comprehension):
+
+            complexity += 1
+
+    return complexity
+
+
+def analyze_python_complexity(
+    file: Path,
+    text: str,
+) -> list[dict[str, Any]]:
+    """Analyze Python function complexity."""
+
+    tree = _parse_python(
+        file,
+        text,
+    )
+
+    if tree is None:
+        return []
+
+    findings = []
+
+    for node in ast.walk(tree):
+
+        if not isinstance(
+            node,
+            (
+                ast.FunctionDef,
+                ast.AsyncFunctionDef,
+            ),
+        ):
+            continue
+
+        complexity = _calculate_python_complexity(
+            node
+        )
+
+        if complexity <= PYTHON_COMPLEXITY_THRESHOLD:
+            continue
+
+        severity = (
+            "HIGH"
+            if complexity >= 20
+            else "MEDIUM"
+        )
+
+        findings.append({
+            "type": "High Python Complexity",
+            "file": str(file),
+            "line": node.lineno,
+            "function": node.name,
+            "complexity": complexity,
+            "threshold": PYTHON_COMPLEXITY_THRESHOLD,
+            "severity": severity,
+            "priority": severity,
+            "confidence": 95,
+            "details": (
+                f"Cyclomatic complexity: "
+                f"{complexity} "
+                f"(threshold: "
+                f"{PYTHON_COMPLEXITY_THRESHOLD})"
+            ),
+            "why": (
+                "Highly complex functions are harder "
+                "to understand, test and maintain."
+            ),
+            "recommendation": (
+                "Split the function into smaller "
+                "focused functions and reduce "
+                "nested branching."
+            ),
+        })
 
     return findings
 
 
 # ============================================================
-# JAVASCRIPT / TYPESCRIPT UNUSED IMPORT DETECTION
+# LONG PYTHON FUNCTIONS
 # ============================================================
 
-def check_unused_javascript_imports(files):
+def _python_function_length(
+    node: ast.AST,
+) -> int:
+    """Return approximate source length."""
+
+    start_line = getattr(
+        node,
+        "lineno",
+        1,
+    )
+
+    end_line = getattr(
+        node,
+        "end_lineno",
+        start_line,
+    )
+
+    return max(
+        1,
+        end_line - start_line + 1,
+    )
+
+
+def check_python_long_functions(
+    file: Path,
+    text: str,
+) -> list[dict[str, Any]]:
+    """Detect unusually long Python functions."""
+
+    tree = _parse_python(
+        file,
+        text,
+    )
+
+    if tree is None:
+        return []
 
     findings = []
 
-    for file in files:
+    for node in ast.walk(tree):
 
-        if file.suffix.lower() not in JS_EXTENSIONS:
+        if not isinstance(
+            node,
+            (
+                ast.FunctionDef,
+                ast.AsyncFunctionDef,
+            ),
+        ):
             continue
 
-        content = read_file(file)
+        length = _python_function_length(node)
 
-        if not content:
+        if length <= LONG_FUNCTION_LINES:
             continue
 
-        # ----------------------------------------------------
-        # Find imports directly from the original source.
-        # ----------------------------------------------------
-
-        import_pattern = re.compile(
-            r"""^\s*import\s+(.+?)\s+from\s+['"][^'"]+['"]\s*;?\s*$""",
-            re.MULTILINE
+        severity = (
+            "HIGH"
+            if length >= LONG_FUNCTION_LINES * 2
+            else "MEDIUM"
         )
 
-        imports = []
+        findings.append({
+            "type": "Long Function",
+            "file": str(file),
+            "line": node.lineno,
+            "function": node.name,
+            "lines": length,
+            "threshold": LONG_FUNCTION_LINES,
+            "severity": severity,
+            "priority": severity,
+            "confidence": 100,
+            "details": (
+                f"Function length: {length} lines "
+                f"(threshold: {LONG_FUNCTION_LINES})"
+            ),
+            "why": (
+                "Long functions are harder to "
+                "understand, test and maintain."
+            ),
+            "recommendation": (
+                "Break this function into smaller "
+                "single-purpose functions."
+            ),
+        })
 
-        for match in import_pattern.finditer(
-            content
-        ):
+    return findings
 
-            imported_part = (
-                match.group(1).strip()
+
+# ============================================================
+# JAVASCRIPT IMPORT DETECTION
+# ============================================================
+
+JS_IMPORT_PATTERN = re.compile(
+    r"""
+    ^\s*
+    import
+    \s+
+    (?:
+        (?P<default>[A-Za-z_$][\w$]*)
+        (?:\s*,\s*)?
+    )?
+    (?:
+        \{
+            (?P<named>[^}]+)
+        \}
+    )?
+    (?:\s+from\s+)?
+    ["'][^"']+["']
+    \s*;?
+    """,
+    re.MULTILINE | re.VERBOSE,
+)
+
+
+def _extract_js_imports(
+    text: str,
+) -> list[tuple[str, int]]:
+    """Extract imported identifiers."""
+
+    imports = []
+
+    for match in JS_IMPORT_PATTERN.finditer(text):
+
+        line = (
+            text.count(
+                "\n",
+                0,
+                match.start(),
+            )
+            + 1
+        )
+
+        default_name = match.group("default")
+
+        if default_name:
+            imports.append(
+                (
+                    default_name,
+                    line,
+                )
             )
 
-            line_number = (
-                content[:match.start()]
-                .count("\n")
+        named = match.group("named")
+
+        if named:
+
+            for item in named.split(","):
+
+                item = item.strip()
+
+                if not item:
+                    continue
+
+                parts = re.split(
+                    r"\s+as\s+",
+                    item,
+                    maxsplit=1,
+                )
+
+                identifier = parts[-1].strip()
+
+                identifier = re.sub(
+                    r"^\s*type\s+",
+                    "",
+                    identifier,
+                )
+
+                if re.match(
+                    r"^[A-Za-z_$][\w$]*$",
+                    identifier,
+                ):
+                    imports.append(
+                        (
+                            identifier,
+                            line,
+                        )
+                    )
+
+    return imports
+
+
+# ============================================================
+# JAVASCRIPT TOKEN USAGE
+# ============================================================
+
+JS_IDENTIFIER_PATTERN = re.compile(
+    r"\b[A-Za-z_$][\w$]*\b"
+)
+
+
+def _strip_js_comments_and_strings(
+    text: str,
+) -> str:
+    """
+    Remove JavaScript comments and string contents.
+
+    This is intentionally lightweight rather than a full
+    JavaScript parser.
+    """
+
+    pattern = re.compile(
+        r"""
+        //.*?$ |
+        /\*.*?\*/ |
+        "(?:\\.|[^"\\])*" |
+        '(?:\\.|[^'\\])*' |
+        `(?:\\.|[^`\\])*`
+        """,
+        re.MULTILINE | re.DOTALL | re.VERBOSE,
+    )
+
+    return pattern.sub(
+        " ",
+        text,
+    )
+
+
+# ============================================================
+# JAVASCRIPT UNUSED IMPORTS
+# ============================================================
+
+def analyze_javascript_unused_imports(
+    file: Path,
+    text: str,
+) -> list[dict[str, Any]]:
+    """Detect unused JavaScript/TypeScript imports."""
+
+    imports = _extract_js_imports(text)
+
+    if not imports:
+        return []
+
+    cleaned = _strip_js_comments_and_strings(text)
+
+    cleaned = JS_IMPORT_PATTERN.sub(
+        " ",
+        cleaned,
+    )
+
+    identifiers = Counter(
+        JS_IDENTIFIER_PATTERN.findall(
+            cleaned
+        )
+    )
+
+    findings = []
+
+    has_jsx = bool(
+        re.search(
+            r"<[A-Za-z][^>]*>",
+            text,
+        )
+    )
+
+    for name, line in imports:
+
+        # React may not appear explicitly in modern JSX.
+        if name == "React" and has_jsx:
+            continue
+
+        if identifiers[name] > 0:
+            continue
+
+        findings.append({
+            "type": "Unused JavaScript Import",
+            "file": str(file),
+            "line": line,
+            "severity": "LOW",
+            "priority": "LOW",
+            "confidence": 90,
+            "details": (
+                f"Unused import: {name}"
+            ),
+            "why": (
+                "This imported symbol does not appear "
+                "to be referenced in the file."
+            ),
+            "recommendation": (
+                "Remove the unused import to reduce "
+                "bundle clutter and improve "
+                "maintainability."
+            ),
+        })
+
+    return findings
+
+
+# ============================================================
+# JAVASCRIPT COMPLEXITY
+# ============================================================
+
+JS_BRANCH_PATTERNS = {
+    "if": r"\bif\s*\(",
+    "for": r"\bfor\s*\(",
+    "while": r"\bwhile\s*\(",
+    "catch": r"\bcatch\s*\(",
+    "switch": r"\bswitch\s*\(",
+    "case": r"\bcase\s+",
+    "ternary": r"\?(?![?.])",
+    "nullish": r"\?\?",
+    "and": r"&&",
+    "or": r"\|\|",
+}
+
+
+def _javascript_complexity(
+    text: str,
+) -> int:
+    """Approximate cyclomatic complexity."""
+
+    cleaned = _strip_js_comments_and_strings(
+        text
+    )
+
+    complexity = 1
+
+    for pattern in JS_BRANCH_PATTERNS.values():
+
+        complexity += len(
+            re.findall(
+                pattern,
+                cleaned,
+            )
+        )
+
+    return complexity
+
+
+def _find_matching_brace(
+    text: str,
+    opening_brace: int,
+) -> int | None:
+    """
+    Find the closing brace matching an opening brace.
+
+    This intentionally handles balanced braces and is not
+    intended to replace a complete JavaScript parser.
+    """
+
+    depth = 0
+
+    for index in range(
+        opening_brace,
+        len(text),
+    ):
+
+        char = text[index]
+
+        if char == "{":
+            depth += 1
+
+        elif char == "}":
+
+            depth -= 1
+
+            if depth == 0:
+                return index + 1
+
+    return None
+
+
+def _extract_javascript_functions(
+    text: str,
+) -> list[tuple[str, int, str]]:
+    """
+    Extract common JavaScript/TypeScript function-like blocks.
+
+    Returns:
+
+        (function_name, starting_line, function_body)
+    """
+
+    functions = []
+
+    patterns = [
+
+        # ----------------------------------------------------
+        # function foo(...) {
+        # ----------------------------------------------------
+
+        re.compile(
+            r"\bfunction\s+"
+            r"([A-Za-z_$][\w$]*)"
+            r"\s*\([^)]*\)\s*\{",
+            re.MULTILINE,
+        ),
+
+        # ----------------------------------------------------
+        # async function foo(...) {
+        # ----------------------------------------------------
+
+        re.compile(
+            r"\basync\s+function\s+"
+            r"([A-Za-z_$][\w$]*)"
+            r"\s*\([^)]*\)\s*\{",
+            re.MULTILINE,
+        ),
+
+        # ----------------------------------------------------
+        # const foo = (...) => {
+        # ----------------------------------------------------
+
+        re.compile(
+            r"\b(?:const|let|var)\s+"
+            r"([A-Za-z_$][\w$]*)"
+            r"\s*=\s*"
+            r"(?:async\s*)?"
+            r"(?:\([^)]*\)|[A-Za-z_$][\w$]*)"
+            r"\s*=>\s*\{",
+            re.MULTILINE,
+        ),
+
+        # ----------------------------------------------------
+        # method(...) {
+        # ----------------------------------------------------
+
+        re.compile(
+            r"^\s*(?:async\s+)?"
+            r"([A-Za-z_$][\w$]*)"
+            r"\s*\([^)]*\)\s*\{",
+            re.MULTILINE,
+        ),
+    ]
+
+    seen = set()
+
+    for pattern in patterns:
+
+        for match in pattern.finditer(text):
+
+            name = match.group(1)
+
+            start = match.start()
+
+            line = (
+                text.count(
+                    "\n",
+                    0,
+                    start,
+                )
                 + 1
             )
 
-            imports.append({
-
-                "names": imported_part,
-
-                "line": line_number
-
-            })
-
-        # ----------------------------------------------------
-        # Remove import declarations before checking usage.
-        # ----------------------------------------------------
-
-        usage_content = re.sub(
-            r"^\s*import\s+.*$",
-            "",
-            content,
-            flags=re.MULTILINE
-        )
-
-        # Remove comments approximately
-        usage_content = re.sub(
-            r"//.*",
-            "",
-            usage_content
-        )
-
-        usage_content = re.sub(
-            r"/\*.*?\*/",
-            "",
-            usage_content,
-            flags=re.DOTALL
-        )
-
-        # ----------------------------------------------------
-        # Check imported names
-        # ----------------------------------------------------
-
-        for item in imports:
-
-            imported_part = item["names"]
-
-            line_number = item["line"]
-
-            names = []
-
-            # Default import
-            if (
-                not imported_part.startswith("{")
-                and not imported_part.startswith("*")
-            ):
-
-                default_match = re.match(
-                    r"([A-Za-z_$][\w$]*)",
-                    imported_part
-                )
-
-                if default_match:
-
-                    names.append(
-                        default_match.group(1)
-                    )
-
-            # Namespace import
-            namespace_match = re.search(
-                r"\*\s+as\s+([A-Za-z_$][\w$]*)",
-                imported_part
+            key = (
+                name,
+                line,
             )
 
-            if namespace_match:
+            if key in seen:
+                continue
 
-                names.append(
-                    namespace_match.group(1)
-                )
+            seen.add(key)
 
-            # Named imports
-            named_match = re.search(
-                r"\{(.*?)\}",
-                imported_part,
-                flags=re.DOTALL
+            opening_brace = text.find(
+                "{",
+                match.start(),
             )
 
-            if named_match:
+            if opening_brace == -1:
+                continue
 
-                named_content = (
-                    named_match.group(1)
+            end = _find_matching_brace(
+                text,
+                opening_brace,
+            )
+
+            if end is None:
+                continue
+
+            body = text[
+                start:end
+            ]
+
+            functions.append(
+                (
+                    name,
+                    line,
+                    body,
                 )
+            )
 
-                for item_name in named_content.split(","):
-
-                    item_name = item_name.strip()
-
-                    if not item_name:
-                        continue
-
-                    if " as " in item_name:
-
-                        local_name = (
-                            item_name.split(
-                                " as ",
-                                1
-                            )[1].strip()
-                        )
-
-                    else:
-
-                        local_name = item_name
-
-                    if re.match(
-                        r"^[A-Za-z_$][\w$]*$",
-                        local_name
-                    ):
-
-                        names.append(
-                            local_name
-                        )
-
-            for name in names:
-
-                occurrences = len(
-                    re.findall(
-                        rf"\b{re.escape(name)}\b",
-                        usage_content
-                    )
-                )
-
-                if occurrences > 0:
-                    continue
-
-                findings.append({
-
-                    "type":
-                        "Unused JavaScript Import",
-
-                    "file":
-                        str(file),
-
-                    "line":
-                        line_number,
-
-                    "details": (
-                        f"Unused import: {name}"
-                    ),
-
-                    "severity":
-                        "LOW",
-
-                    "why": (
-                        "This imported symbol does "
-                        "not appear to be referenced "
-                        "in the file."
-                    ),
-
-                    "recommendation": (
-                        "Remove the unused import to "
-                        "reduce bundle clutter and "
-                        "improve maintainability."
-                    ),
-
-                    "priority":
-                        "LOW"
-
-                })
-
-    return findings
+    return functions
 
 
-# ============================================================
-# SMART UNUSED IMPORT ANALYSIS
-# ============================================================
+def analyze_javascript_complexity(
+    file: Path,
+    text: str,
+) -> list[dict[str, Any]]:
+    """
+    Analyze JavaScript/TypeScript complexity per function.
+    """
 
-def check_unused_imports(files):
+    functions = _extract_javascript_functions(
+        text
+    )
+
+    if not functions:
+        return []
 
     findings = []
 
-    findings.extend(
-        check_unused_python_imports(
-            files
-        )
-    )
+    for name, line, body in functions:
 
-    findings.extend(
-        check_unused_javascript_imports(
-            files
+        complexity = _javascript_complexity(
+            body
         )
-    )
+
+        if complexity <= JAVASCRIPT_COMPLEXITY_THRESHOLD:
+            continue
+
+        # ----------------------------------------------------
+        # Severity
+        # ----------------------------------------------------
+
+        if complexity >= 20:
+            severity = "HIGH"
+        else:
+            severity = "MEDIUM"
+
+        # ----------------------------------------------------
+        # Finding
+        # ----------------------------------------------------
+
+        findings.append({
+            "type": "High JavaScript Complexity",
+            "file": str(file),
+            "line": line,
+            "function": name,
+            "complexity": complexity,
+            "threshold": JAVASCRIPT_COMPLEXITY_THRESHOLD,
+            "severity": severity,
+            "priority": severity,
+            "confidence": 80,
+            "details": (
+                f"Function '{name}' estimated "
+                f"complexity: {complexity} "
+                f"(threshold: "
+                f"{JAVASCRIPT_COMPLEXITY_THRESHOLD})"
+            ),
+            "why": (
+                "Highly complex functions are harder "
+                "to understand, test and maintain."
+            ),
+            "recommendation": (
+                "Split this function into smaller "
+                "focused functions and reduce "
+                "nested conditions."
+            ),
+        })
 
     return findings
 
 
 # ============================================================
-# QUALITY FINDING DEDUPLICATION
+# TODO / FIXME
 # ============================================================
 
-def deduplicate_quality_findings(
-    findings
-):
+TODO_PATTERN = re.compile(
+    r"\b(TODO|FIXME|XXX|HACK)\b",
+    re.IGNORECASE,
+)
 
-    unique_findings = []
+
+def check_todos(
+    file: Path,
+    text: str,
+) -> list[dict[str, Any]]:
+    """Detect TODO/FIXME-style markers."""
+
+    findings = []
+
+    for match in TODO_PATTERN.finditer(text):
+
+        line = (
+            text.count(
+                "\n",
+                0,
+                match.start(),
+            )
+            + 1
+        )
+
+        marker = match.group(1).upper()
+
+        findings.append({
+            "type": f"{marker} Marker",
+            "file": str(file),
+            "line": line,
+            "severity": "LOW",
+            "priority": "LOW",
+            "confidence": 100,
+            "details": (
+                f"Found {marker} marker."
+            ),
+            "why": (
+                "Unresolved TODO/FIXME markers can "
+                "indicate unfinished work or "
+                "technical debt."
+            ),
+            "recommendation": (
+                "Review the marker and either complete "
+                "the work or convert it into a "
+                "tracked issue."
+            ),
+        })
+
+    return findings
+
+
+# ============================================================
+# NORMALIZATION FOR DUPLICATE DETECTION
+# ============================================================
+
+def _normalize_code_line(
+    line: str,
+) -> str:
+    """Normalize a source line."""
+
+    # Remove JavaScript comments.
+    line = re.sub(
+        r"//.*$",
+        "",
+        line,
+    )
+
+    # Remove Python comments.
+    line = re.sub(
+        r"#.*$",
+        "",
+        line,
+    )
+
+    # Normalize whitespace.
+    line = re.sub(
+        r"\s+",
+        " ",
+        line,
+    )
+
+    return line.strip()
+
+
+def _code_blocks(
+    file: Path,
+    text: str,
+) -> list[tuple[list[str], int]]:
+    """
+    Create normalized sliding blocks.
+
+    Blank/comment-only lines are ignored.
+    """
+
+    lines = [
+        _normalize_code_line(line)
+        for line in text.splitlines()
+    ]
+
+    lines = [
+        line
+        for line in lines
+        if line
+    ]
+
+    blocks = []
+
+    if len(lines) < DUPLICATE_MIN_LINES:
+        return blocks
+
+    for index in range(
+        len(lines) - DUPLICATE_MIN_LINES + 1
+    ):
+
+        block = lines[
+            index:
+            index + DUPLICATE_MIN_LINES
+        ]
+
+        blocks.append(
+            (
+                block,
+                index + 1,
+            )
+        )
+
+    return blocks
+
+
+# ============================================================
+# DUPLICATE CODE HELPERS
+# ============================================================
+
+def _similarity(
+    a: list[str],
+    b: list[str],
+) -> float:
+    """Calculate simple line-based similarity."""
+
+    if len(a) != len(b):
+        return 0.0
+
+    if not a:
+        return 0.0
+
+    matches = sum(
+        1
+        for left, right in zip(a, b)
+        if left == right
+    )
+
+    return matches / len(a)
+
+
+def _extend_duplicate_block(
+    first: list[str],
+    second: list[str],
+) -> int:
+    """
+    Determine the longest matching block length.
+
+    The initial match is DUPLICATE_MIN_LINES long.
+    This extends it while the following lines match.
+    """
+
+    length = min(
+        len(first),
+        len(second),
+    )
+
+    matched = 0
+
+    for index in range(length):
+
+        if first[index] != second[index]:
+            break
+
+        matched += 1
+
+    return matched
+
+
+# ============================================================
+# DUPLICATE CODE
+# ============================================================
+
+def check_duplicate_code(
+    files: list[Path],
+) -> list[dict[str, Any]]:
+    """
+    Detect repeated blocks across source files.
+
+    IMPORTANT:
+
+    The old implementation could report the same duplicated
+    region many times because every sliding 8-line window
+    created another finding.
+
+    This implementation:
+
+    1. Finds candidate matching blocks.
+    2. Groups results by file pair.
+    3. Keeps only the strongest match for each pair.
+    4. Prevents duplicate reports for the same region.
+    """
+
+    blocks_by_file = {}
+
+    # --------------------------------------------------------
+    # Collect blocks
+    # --------------------------------------------------------
+
+    for file in files:
+
+        category = _get_file_category(file)
+
+        if category == "generated":
+            continue
+
+        text = _read_file(file)
+
+        if not text:
+            continue
+
+        blocks = _code_blocks(
+            file,
+            text,
+        )
+
+        if blocks:
+            blocks_by_file[file] = blocks
+
+    # --------------------------------------------------------
+    # Compare files
+    # --------------------------------------------------------
+
+    findings = []
+
+    file_list = list(
+        blocks_by_file.keys()
+    )
+
+    # One finding per meaningful file pair.
+    best_matches = {}
+
+    for i in range(
+        len(file_list)
+    ):
+
+        file_a = file_list[i]
+
+        for j in range(
+            i + 1,
+            len(file_list),
+        ):
+
+            file_b = file_list[j]
+
+            best_match = None
+
+            blocks_a = blocks_by_file[file_a]
+            blocks_b = blocks_by_file[file_b]
+
+            for block_a, line_a in blocks_a:
+
+                # ------------------------------------------------
+                # Use first few normalized lines as a cheap
+                # candidate signature.
+                # ------------------------------------------------
+
+                signature_a = tuple(
+                    block_a[:3]
+                )
+
+                for block_b, line_b in blocks_b:
+
+                    if signature_a != tuple(
+                        block_b[:3]
+                    ):
+                        continue
+
+                    similarity = _similarity(
+                        block_a,
+                        block_b,
+                    )
+
+                    if similarity < DUPLICATE_SIMILARITY:
+                        continue
+
+                    matched_lines = _extend_duplicate_block(
+                        block_a,
+                        block_b,
+                    )
+
+                    candidate = (
+                        matched_lines,
+                        similarity,
+                        line_a,
+                        line_b,
+                    )
+
+                    if (
+                        best_match is None
+                        or candidate[0] > best_match[0]
+                        or (
+                            candidate[0] == best_match[0]
+                            and candidate[1] > best_match[1]
+                        )
+                    ):
+                        best_match = candidate
+
+            if best_match is None:
+                continue
+
+            matched_lines, similarity, line_a, line_b = (
+                best_match
+            )
+
+            best_matches[
+                (
+                    str(file_a),
+                    str(file_b),
+                )
+            ] = (
+                matched_lines,
+                similarity,
+                line_a,
+                line_b,
+            )
+
+    # --------------------------------------------------------
+    # Create findings
+    # --------------------------------------------------------
+
+    for (
+        file_a,
+        file_b,
+    ), (
+        matched_lines,
+        similarity,
+        line_a,
+        line_b,
+    ) in best_matches.items():
+
+        findings.append({
+            "type": "Duplicate Code",
+            "file": file_a,
+            "line": line_a,
+            "file_2": file_b,
+            "line_2": line_b,
+            "severity": "LOW",
+            "priority": "LOW",
+            "confidence": int(
+                similarity * 100
+            ),
+            "duplicate_lines": matched_lines,
+            "similarity": round(
+                similarity,
+                3,
+            ),
+            "details": (
+                f"Repeated {matched_lines}-line "
+                f"code block with "
+                f"{similarity * 100:.0f}% similarity."
+            ),
+            "why": (
+                "Duplicated code increases "
+                "maintenance cost and can cause "
+                "fixes to be applied in one location "
+                "but missed in another."
+            ),
+            "recommendation": (
+                "Consider extracting shared logic "
+                "into a reusable function, component "
+                "or module."
+            ),
+        })
+
+    return findings
+
+
+# ============================================================
+# FINDING DEDUPLICATION
+# ============================================================
+
+def _finding_key(
+    finding: dict[str, Any],
+) -> tuple:
+    """Create a stable identity for a finding."""
+
+    return (
+        finding.get("type"),
+        finding.get("file"),
+        finding.get("line"),
+        finding.get("function"),
+        finding.get("details"),
+        finding.get("file_2"),
+        finding.get("line_2"),
+    )
+
+
+def remove_duplicate_findings(
+    findings: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Remove exact duplicate findings."""
+
+    unique = []
 
     seen = set()
 
     for finding in findings:
 
-        key = (
-
-            finding.get(
-                "type",
-                ""
-            ),
-
-            finding.get(
-                "file",
-                ""
-            ),
-
-            finding.get(
-                "line",
-                0
-            ),
-
-            finding.get(
-                "function",
-                ""
-            ),
-
-            finding.get(
-                "file_2",
-                ""
-            ),
-
-            finding.get(
-                "line_2",
-                0
-            )
-
+        key = _finding_key(
+            finding
         )
 
         if key in seen:
@@ -1805,77 +1545,179 @@ def deduplicate_quality_findings(
 
         seen.add(key)
 
-        unique_findings.append(
+        unique.append(
             finding
         )
 
-    return unique_findings
+    return unique
 
 
 # ============================================================
-# SMART QUALITY ANALYSIS
+# TEST-FILE ADJUSTMENT
+# ============================================================
+
+def _adjust_test_finding(
+    finding: dict[str, Any],
+) -> dict[str, Any]:
+    """Add context when a finding belongs to a test file."""
+
+    path = Path(
+        finding.get(
+            "file",
+            "",
+        )
+    )
+
+    if _get_file_category(path) != "test":
+        return finding
+
+    adjusted = dict(finding)
+
+    adjusted["test_file"] = True
+
+    return adjusted
+
+
+# ============================================================
+# MAIN QUALITY ANALYZER
 # ============================================================
 
 def analyze_quality(
-    files,
-    config=None
-):
+    files: list[Path],
+    config: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    """
+    Run the complete Repo Doctor quality analysis.
+
+    Public API:
+
+        analyze_quality(files, config)
+    """
 
     findings = []
 
     # --------------------------------------------------------
-    # 1. Large files
+    # Large files
     # --------------------------------------------------------
 
     findings.extend(
         check_large_files(
             files,
-            config
+            config,
         )
     )
 
     # --------------------------------------------------------
-    # 2. TODO / FIXME
+    # Per-file analysis
     # --------------------------------------------------------
 
-    findings.extend(
-        check_todos(
-            files
+    for file in files:
+
+        extension = file.suffix.lower()
+
+        category = _get_file_category(
+            file
         )
-    )
 
-    # --------------------------------------------------------
-    # 3. Python long functions
-    # --------------------------------------------------------
+        if category == "generated":
+            continue
 
-    findings.extend(
-        check_long_functions(
-            files
+        text = _read_file(file)
+
+        if not text:
+            continue
+
+        # ----------------------------------------------------
+        # TODO / FIXME
+        # ----------------------------------------------------
+
+        findings.extend(
+            check_todos(
+                file,
+                text,
+            )
         )
-    )
+
+        # ----------------------------------------------------
+        # Python
+        # ----------------------------------------------------
+
+        if extension == ".py":
+
+            tree = _parse_python(
+                file,
+                text,
+            )
+
+            if tree is not None:
+
+                for name, line in _python_unused_imports(
+                    tree
+                ):
+
+                    findings.append({
+                        "type": "Unused Python Import",
+                        "file": str(file),
+                        "line": line,
+                        "severity": "LOW",
+                        "priority": "LOW",
+                        "confidence": 95,
+                        "details": (
+                            f"Unused import: {name}"
+                        ),
+                        "why": (
+                            "This imported symbol does not "
+                            "appear to be referenced in "
+                            "the file."
+                        ),
+                        "recommendation": (
+                            "Remove the unused import to "
+                            "reduce clutter and improve "
+                            "maintainability."
+                        ),
+                    })
+
+            findings.extend(
+                analyze_python_complexity(
+                    file,
+                    text,
+                )
+            )
+
+            findings.extend(
+                check_python_long_functions(
+                    file,
+                    text,
+                )
+            )
+
+        # ----------------------------------------------------
+        # JavaScript / TypeScript
+        # ----------------------------------------------------
+
+        elif extension in {
+            ".js",
+            ".jsx",
+            ".ts",
+            ".tsx",
+        }:
+
+            findings.extend(
+                analyze_javascript_unused_imports(
+                    file,
+                    text,
+                )
+            )
+
+            findings.extend(
+                analyze_javascript_complexity(
+                    file,
+                    text,
+                )
+            )
 
     # --------------------------------------------------------
-    # 4. Python complexity
-    # --------------------------------------------------------
-
-    findings.extend(
-        analyze_python_complexity(
-            files
-        )
-    )
-
-    # --------------------------------------------------------
-    # 5. JavaScript / TypeScript quality
-    # --------------------------------------------------------
-
-    findings.extend(
-        analyze_javascript_quality(
-            files
-        )
-    )
-
-    # --------------------------------------------------------
-    # 6. Duplicate code
+    # Duplicate code
     # --------------------------------------------------------
 
     findings.extend(
@@ -1885,19 +1727,106 @@ def analyze_quality(
     )
 
     # --------------------------------------------------------
-    # 7. Unused imports
+    # Context adjustments
     # --------------------------------------------------------
 
-    findings.extend(
-        check_unused_imports(
-            files
+    findings = [
+        _adjust_test_finding(
+            finding
         )
+        for finding in findings
+    ]
+
+    # --------------------------------------------------------
+    # Remove exact duplicates
+    # --------------------------------------------------------
+
+    findings = remove_duplicate_findings(
+        findings
     )
 
     # --------------------------------------------------------
-    # Remove duplicates
+    # Stable ordering
     # --------------------------------------------------------
 
-    return deduplicate_quality_findings(
+    severity_order = {
+        "HIGH": 0,
+        "MEDIUM": 1,
+        "LOW": 2,
+        "INFO": 3,
+    }
+
+    findings.sort(
+        key=lambda finding: (
+            severity_order.get(
+                finding.get(
+                    "severity",
+                    "LOW",
+                ),
+                9,
+            ),
+            finding.get(
+                "file",
+                "",
+            ),
+            finding.get(
+                "line",
+                0,
+            ),
+            finding.get(
+                "type",
+                "",
+            ),
+        )
+    )
+
+    return findings
+
+
+# ============================================================
+# BACKWARD-COMPATIBILITY ALIAS
+# ============================================================
+
+def analyze_javascript_quality(
+    files: list[Path],
+) -> list[dict[str, Any]]:
+    """
+    Backward-compatible JavaScript quality API.
+
+    Older main.py versions can still call this directly.
+    """
+
+    findings = []
+
+    for file in files:
+
+        if file.suffix.lower() not in {
+            ".js",
+            ".jsx",
+            ".ts",
+            ".tsx",
+        }:
+            continue
+
+        text = _read_file(file)
+
+        if not text:
+            continue
+
+        findings.extend(
+            analyze_javascript_unused_imports(
+                file,
+                text,
+            )
+        )
+
+        findings.extend(
+            analyze_javascript_complexity(
+                file,
+                text,
+            )
+        )
+
+    return remove_duplicate_findings(
         findings
     )
