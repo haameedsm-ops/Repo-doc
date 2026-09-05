@@ -395,6 +395,11 @@ def _python_imports(
 
         elif isinstance(node, ast.ImportFrom):
 
+            # ``from __future__ import ...`` contains
+            # compiler directives, not normal imports.
+            if node.module == "__future__":
+                continue
+
             for alias in node.names:
 
                 if alias.name == "*":
@@ -417,8 +422,16 @@ def _python_imports(
 
 def _python_unused_imports(
     tree: ast.AST,
+    file: Path,
 ) -> list[tuple[str, int]]:
-    """Find Python imports that are never referenced."""
+    """Find Python imports that are never referenced.
+
+    Imports in ``__init__.py`` are intentionally allowed because
+    package initializers commonly re-export public symbols.
+    """
+
+    if file.name == "__init__.py":
+        return []
 
     imports = _python_imports(tree)
 
@@ -865,33 +878,7 @@ JS_BRANCH_PATTERNS = {
     "switch": r"\bswitch\s*\(",
     "case": r"\bcase\s+",
     "ternary": r"\?(?![?.])",
-    "nullish": r"\?\?",
-    "and": r"&&",
-    "or": r"\|\|",
 }
-
-
-def _javascript_complexity(
-    text: str,
-) -> int:
-    """Approximate cyclomatic complexity."""
-
-    cleaned = _strip_js_comments_and_strings(
-        text
-    )
-
-    complexity = 1
-
-    for pattern in JS_BRANCH_PATTERNS.values():
-
-        complexity += len(
-            re.findall(
-                pattern,
-                cleaned,
-            )
-        )
-
-    return complexity
 
 
 def _find_matching_brace(
@@ -982,8 +969,10 @@ def _extract_javascript_functions(
         # method(...) {
         # ----------------------------------------------------
 
-        re.compile(
+         re.compile(
             r"^\s*(?:async\s+)?"
+            r"(?!if\b|for\b|while\b|switch\b|catch\b|"
+            r"with\b)"
             r"([A-Za-z_$][\w$]*)"
             r"\s*\([^)]*\)\s*\{",
             re.MULTILINE,
@@ -1048,6 +1037,213 @@ def _extract_javascript_functions(
             )
 
     return functions
+
+
+def _mask_nested_javascript_functions(
+    text: str,
+) -> str:
+    """
+    Mask nested JavaScript/TypeScript function bodies.
+
+    This prevents complexity belonging to nested functions
+    and arrow-function callbacks from being counted as
+    complexity of their parent function.
+
+    Named functions are obtained from the existing extractor.
+    Anonymous arrow-function callbacks are detected only for
+    masking and are not reported as standalone findings.
+    """
+
+    functions = _extract_javascript_functions(
+        text
+    )
+
+    if not functions:
+        return text
+
+    # --------------------------------------------------------
+    # Find ranges of named/extracted functions.
+    # --------------------------------------------------------
+
+    ranges = []
+
+    for name, line, body in functions:
+
+        start = None
+        current_line = 1
+
+        for index, char in enumerate(text):
+
+            if current_line == line:
+                start = index
+
+                while (
+                    start < len(text)
+                    and text[start].isspace()
+                    and text[start] != "\n"
+                ):
+                    start += 1
+
+                break
+
+            if char == "\n":
+                current_line += 1
+
+        if start is None:
+            continue
+
+        opening_brace = text.find(
+            "{",
+            start,
+        )
+
+        if opening_brace == -1:
+            continue
+
+        end = _find_matching_brace(
+            text,
+            opening_brace,
+        )
+
+        if end is None:
+            continue
+
+        ranges.append(
+            (
+                start,
+                opening_brace + 1,
+                end,
+            )
+        )
+
+    if not ranges:
+        return text
+
+    # --------------------------------------------------------
+    # Detect anonymous arrow-function callbacks.
+    #
+    # Examples:
+    #
+    #   items.map((item) => {
+    #       ...
+    #   })
+    #
+    #   items.filter((item) => {
+    #       ...
+    #   })
+    #
+    #   items.reduce((a, b) => {
+    #       ...
+    #   })
+    # --------------------------------------------------------
+
+    arrow_pattern = re.compile(
+        r"(?:"
+        r"\(\s*[^()]*\s*\)"
+        r"|"
+        r"[A-Za-z_$][\w$]*"
+        r")"
+        r"\s*=>\s*\{",
+        re.MULTILINE,
+    )
+
+    for match in arrow_pattern.finditer(text):
+
+        opening_brace = text.find(
+            "{",
+            match.start(),
+        )
+
+        if opening_brace == -1:
+            continue
+
+        end = _find_matching_brace(
+            text,
+            opening_brace,
+        )
+
+        if end is None:
+            continue
+
+        ranges.append(
+            (
+                match.start(),
+                opening_brace + 1,
+                end,
+            )
+        )
+
+    # --------------------------------------------------------
+    # Sort ranges by source position.
+    # --------------------------------------------------------
+
+    ranges.sort(
+        key=lambda item: (
+            item[0],
+            -item[2],
+        )
+    )
+
+    # --------------------------------------------------------
+    # Find the outermost function.
+    # --------------------------------------------------------
+
+    outer_start, _, outer_end = ranges[0]
+
+    chars = list(text)
+
+    # --------------------------------------------------------
+    # Mask every nested function/callback body.
+    # --------------------------------------------------------
+
+    for start, opening_brace, end in ranges[1:]:
+
+        if (
+            start >= outer_start
+            and end <= outer_end
+        ):
+
+            for index in range(
+                opening_brace + 1,
+                end,
+            ):
+
+                if chars[index] != "\n":
+                    chars[index] = " "
+
+    return "".join(chars)
+
+def _javascript_complexity(
+    text: str,
+) -> int:
+    """
+    Approximate cyclomatic complexity.
+
+    Nested function bodies are excluded so that complexity
+    is attributed to the function where the control flow
+    actually belongs.
+    """
+
+    cleaned = _strip_js_comments_and_strings(
+        text
+    )
+
+    cleaned = _mask_nested_javascript_functions(
+        cleaned
+    )
+
+    complexity = 1
+
+    for pattern in JS_BRANCH_PATTERNS.values():
+
+        complexity += len(
+            re.findall(
+                pattern,
+                cleaned,
+            )
+        )
+
+    return complexity
 
 
 def analyze_javascript_complexity(
@@ -1182,7 +1378,7 @@ def check_todos(
 def _normalize_code_line(
     line: str,
 ) -> str:
-    """Normalize a source line."""
+    """Normalize a source line for duplicate detection."""
 
     # Remove JavaScript comments.
     line = re.sub(
@@ -1215,19 +1411,31 @@ def _code_blocks(
     """
     Create normalized sliding blocks.
 
-    Blank/comment-only lines are ignored.
+    Blank/comment-only lines are ignored for comparison,
+    but the returned line number always refers to the
+    original source file.
     """
 
-    lines = [
-        _normalize_code_line(line)
-        for line in text.splitlines()
-    ]
+    lines = []
 
-    lines = [
-        line
-        for line in lines
-        if line
-    ]
+    for original_line_number, line in enumerate(
+        text.splitlines(),
+        start=1,
+    ):
+
+        normalized = _normalize_code_line(
+            line
+        )
+
+        if not normalized:
+            continue
+
+        lines.append(
+            (
+                normalized,
+                original_line_number,
+            )
+        )
 
     blocks = []
 
@@ -1238,15 +1446,24 @@ def _code_blocks(
         len(lines) - DUPLICATE_MIN_LINES + 1
     ):
 
-        block = lines[
+        block_lines = lines[
             index:
             index + DUPLICATE_MIN_LINES
         ]
 
+        block = [
+            line
+            for line, _ in block_lines
+        ]
+
+        original_line_number = (
+            block_lines[0][1]
+        )
+
         blocks.append(
             (
                 block,
-                index + 1,
+                original_line_number,
             )
         )
 
@@ -1261,7 +1478,7 @@ def _similarity(
     a: list[str],
     b: list[str],
 ) -> float:
-    """Calculate simple line-based similarity."""
+    """Calculate line-based similarity."""
 
     if len(a) != len(b):
         return 0.0
@@ -1279,29 +1496,45 @@ def _similarity(
 
 
 def _extend_duplicate_block(
-    first: list[str],
-    second: list[str],
+    lines_a: list[str],
+    lines_b: list[str],
+    start_a: int,
+    start_b: int,
 ) -> int:
     """
-    Determine the longest matching block length.
+    Extend an initially matching duplicate block.
 
-    The initial match is DUPLICATE_MIN_LINES long.
-    This extends it while the following lines match.
+    The initial duplicate window has already passed the
+    similarity threshold.
+
+    This function counts the full duplicate region by
+    continuing line-by-line from the initial window.
+
+    The initial window itself is always included.
     """
 
-    length = min(
-        len(first),
-        len(second),
+    matched = DUPLICATE_MIN_LINES
+
+    index_a = (
+        start_a
+        + DUPLICATE_MIN_LINES
     )
 
-    matched = 0
+    index_b = (
+        start_b
+        + DUPLICATE_MIN_LINES
+    )
 
-    for index in range(length):
-
-        if first[index] != second[index]:
-            break
+    while (
+        index_a < len(lines_a)
+        and index_b < len(lines_b)
+        and lines_a[index_a] == lines_b[index_b]
+    ):
 
         matched += 1
+
+        index_a += 1
+        index_b += 1
 
     return matched
 
@@ -1316,24 +1549,24 @@ def check_duplicate_code(
     """
     Detect repeated blocks across source files.
 
-    IMPORTANT:
+    Rules:
 
-    The old implementation could report the same duplicated
-    region many times because every sliding 8-line window
-    created another finding.
-
-    This implementation:
-
-    1. Finds candidate matching blocks.
-    2. Groups results by file pair.
-    3. Keeps only the strongest match for each pair.
-    4. Prevents duplicate reports for the same region.
+    1. A duplicate must contain at least
+       DUPLICATE_MIN_LINES lines.
+    2. The initial block must meet
+       DUPLICATE_SIMILARITY.
+    3. Matching blocks are extended using the
+       normalized source-line positions.
+    4. Only the strongest match for each file pair
+       is reported.
+    5. Original source line numbers are preserved.
     """
 
     blocks_by_file = {}
+    normalized_by_file = {}
 
     # --------------------------------------------------------
-    # Collect blocks
+    # Collect normalized source lines and blocks
     # --------------------------------------------------------
 
     for file in files:
@@ -1353,8 +1586,27 @@ def check_duplicate_code(
             text,
         )
 
-        if blocks:
-            blocks_by_file[file] = blocks
+        if not blocks:
+            continue
+
+        blocks_by_file[file] = blocks
+
+        normalized_lines = []
+
+        for line in text.splitlines():
+
+            normalized = _normalize_code_line(
+                line
+            )
+
+            if normalized:
+                normalized_lines.append(
+                    normalized
+                )
+
+        normalized_by_file[file] = (
+            normalized_lines
+        )
 
     # --------------------------------------------------------
     # Compare files
@@ -1366,7 +1618,6 @@ def check_duplicate_code(
         blocks_by_file.keys()
     )
 
-    # One finding per meaningful file pair.
     best_matches = {}
 
     for i in range(
@@ -1382,24 +1633,31 @@ def check_duplicate_code(
 
             file_b = file_list[j]
 
-            best_match = None
-
             blocks_a = blocks_by_file[file_a]
             blocks_b = blocks_by_file[file_b]
 
-            for block_a, line_a in blocks_a:
+            lines_a = normalized_by_file[file_a]
+            lines_b = normalized_by_file[file_b]
 
-                # ------------------------------------------------
-                # Use first few normalized lines as a cheap
-                # candidate signature.
-                # ------------------------------------------------
+            best_match = None
+
+            # ------------------------------------------------
+            # Compare every candidate block
+            # ------------------------------------------------
+
+            for start_a, (block_a, line_a) in enumerate(
+                blocks_a
+            ):
 
                 signature_a = tuple(
                     block_a[:3]
                 )
 
-                for block_b, line_b in blocks_b:
+                for start_b, (block_b, line_b) in enumerate(
+                    blocks_b
+                ):
 
+                    # Cheap candidate filter.
                     if signature_a != tuple(
                         block_b[:3]
                     ):
@@ -1413,10 +1671,23 @@ def check_duplicate_code(
                     if similarity < DUPLICATE_SIMILARITY:
                         continue
 
+                    # ------------------------------------------------
+                    # Extend the duplicate using the actual
+                    # normalized-line positions.
+                    # ------------------------------------------------
+
                     matched_lines = _extend_duplicate_block(
-                        block_a,
-                        block_b,
+                        lines_a,
+                        lines_b,
+                        start_a,
+                        start_b,
                     )
+
+                    # A candidate already contains the minimum
+                    # duplicate window, so this should never be
+                    # smaller than DUPLICATE_MIN_LINES.
+                    if matched_lines < DUPLICATE_MIN_LINES:
+                        continue
 
                     candidate = (
                         matched_lines,
@@ -1424,6 +1695,14 @@ def check_duplicate_code(
                         line_a,
                         line_b,
                     )
+
+                    # ------------------------------------------------
+                    # Keep the strongest match for this file pair.
+                    #
+                    # Priority:
+                    #   1. Longer duplicated region
+                    #   2. Higher initial similarity
+                    # ------------------------------------------------
 
                     if (
                         best_match is None
@@ -1503,7 +1782,6 @@ def check_duplicate_code(
         })
 
     return findings
-
 
 # ============================================================
 # FINDING DEDUPLICATION
@@ -1652,7 +1930,8 @@ def analyze_quality(
             if tree is not None:
 
                 for name, line in _python_unused_imports(
-                    tree
+                    tree,
+                    file
                 ):
 
                     findings.append({

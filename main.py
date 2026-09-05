@@ -549,21 +549,20 @@ for ecosystem, dependencies in dependency_groups.items():
         # ----------------------------------------------------
         # Vulnerability finding
         # ----------------------------------------------------
-
         if vulnerabilities:
-           highest_severity = get_vulnerability_severity(
-           vulnerabilities
-        )
+            highest_severity = get_vulnerability_severity(
+                vulnerabilities
+            )
 
-        dependency_findings.append({
-           "type": "Vulnerable Dependency",
-           "package": name,
-           "version": version,
-           "count": len(vulnerabilities),
-           "severity": highest_severity,
-           "confidence": 100,
-           "file": dependency["_file"]
-    })
+            dependency_findings.append({
+                "type": "Vulnerable Dependency",
+                "package": name,
+                "version": version,
+                "count": len(vulnerabilities),
+                "severity": highest_severity,
+                "confidence": 100,
+                "file": dependency["_file"]
+            })
 
 # ============================================================
 # COMBINE SECURITY FINDINGS
@@ -592,7 +591,7 @@ quality_score = quality_result["score"]
 quality_breakdown = quality_result["breakdown"]
 
 documentation_score = calculate_documentation_score(
-    files
+    repo_path
 )
 
 overall_score = calculate_overall_score(

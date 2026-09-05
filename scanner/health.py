@@ -1,4 +1,4 @@
-
+from pathlib import Path
 # ============================================================
 # SECURITY SCORE
 # ============================================================
@@ -163,9 +163,12 @@ def calculate_quality_score(quality_findings):
     Starts at 100 and deducts points based on issue severity
     and issue type.
 
-    Quality deductions are capped at 50 points so that a
-    repository with many findings does not immediately receive
-    an unusably low score.
+    Repeated low-severity findings such as duplicate-code
+    warnings are given lighter weighting so they do not
+    overwhelm genuinely important complexity and maintainability
+    issues.
+
+    Total quality deductions are capped at 50 points.
     """
 
     score = 100
@@ -177,13 +180,26 @@ def calculate_quality_score(quality_findings):
     }
 
     # --------------------------------------------------------
-    # Base deductions by severity
+    # Base deductions by severity and issue type
     # --------------------------------------------------------
 
     severity_deductions = {
         "HIGH": 7,
         "MEDIUM": 4,
         "LOW": 2
+    }
+
+    large_file_deductions = {
+        "HIGH": 6,
+        "MEDIUM": 4,
+        "LOW": 2
+    }
+
+    # Low-severity findings that can occur repeatedly
+    # should have a lighter impact on the overall score.
+    repeated_low_deductions = {
+        "Duplicate Code": 1,
+        "Unused Python Import": 1
     }
 
     # --------------------------------------------------------
@@ -207,26 +223,42 @@ def calculate_quality_score(quality_findings):
             "Quality issue"
         )
 
-        deduction = severity_deductions[severity]
-
         # ----------------------------------------------------
-        # Large files get slightly different weighting.
+        # Large files get their own weighting.
         # ----------------------------------------------------
 
         if finding_type == "Large File":
-
-            large_file_deductions = {
-                "HIGH": 6,
-                "MEDIUM": 4,
-                "LOW": 2
-            }
 
             deduction = large_file_deductions.get(
                 severity,
                 2
             )
 
+        # ----------------------------------------------------
+        # Repeated low-severity findings get lighter weighting.
+        # ----------------------------------------------------
+
+        elif (
+            severity == "LOW"
+            and finding_type in repeated_low_deductions
+        ):
+
+            deduction = repeated_low_deductions[
+                finding_type
+            ]
+
+        # ----------------------------------------------------
+        # Standard severity-based deduction.
+        # ----------------------------------------------------
+
+        else:
+
+            deduction = severity_deductions[
+                severity
+            ]
+
         total_deduction += deduction
+
         breakdown[severity] += deduction
 
     # --------------------------------------------------------
@@ -235,10 +267,45 @@ def calculate_quality_score(quality_findings):
 
     MAX_QUALITY_DEDUCTION = 50
 
-    total_deduction = min(
-        total_deduction,
-        MAX_QUALITY_DEDUCTION
-    )
+    if total_deduction > MAX_QUALITY_DEDUCTION:
+
+        total_deduction = MAX_QUALITY_DEDUCTION
+
+        # Keep the displayed breakdown consistent with the
+        # actual deduction applied to the final score.
+        breakdown_total = sum(
+            breakdown.values()
+        )
+
+        if breakdown_total > MAX_QUALITY_DEDUCTION:
+
+            scale = (
+                MAX_QUALITY_DEDUCTION
+                / breakdown_total
+            )
+
+            for severity in breakdown:
+
+                breakdown[severity] = round(
+                    breakdown[severity] * scale
+                )
+
+            # Correct rounding difference.
+            adjusted_total = sum(
+                breakdown.values()
+            )
+
+            difference = (
+                MAX_QUALITY_DEDUCTION
+                - adjusted_total
+            )
+
+            if difference != 0:
+                breakdown["HIGH"] += difference
+
+    # --------------------------------------------------------
+    # Calculate final score.
+    # --------------------------------------------------------
 
     score -= total_deduction
 
@@ -258,10 +325,16 @@ def calculate_quality_score(quality_findings):
 # DOCUMENTATION SCORE
 # ============================================================
 
-def calculate_documentation_score(files):
+def calculate_documentation_score(repo_path):
     """
-    Score repository documentation based on README presence.
+    Score repository documentation.
+
+    Checks the repository directly instead of relying on
+    source-file scanning, because README and documentation
+    files are not necessarily source files.
     """
+
+    repo = Path(repo_path)
 
     readme_names = {
         "readme.md",
@@ -270,12 +343,12 @@ def calculate_documentation_score(files):
     }
 
     has_readme = any(
-        file.name.lower() in readme_names
-        for file in files
+        file.is_file()
+        and file.name.lower() in readme_names
+        for file in repo.iterdir()
     )
 
     return 100 if has_readme else 30
-
 
 # ============================================================
 # OVERALL SCORE
@@ -960,7 +1033,8 @@ def print_quality_breakdown(
 ):
     """
     Print an explainable code quality score
-    with deductions for each finding.
+    using the same deduction rules as
+    calculate_quality_score().
     """
 
     print(
@@ -1005,6 +1079,11 @@ def print_quality_breakdown(
         "LOW": 2
     }
 
+    repeated_low_deductions = {
+        "Duplicate Code": 1,
+        "Unused Python Import": 1
+    }
+
     MAX_QUALITY_DEDUCTION = 50
 
     raw_deduction = 0
@@ -1045,6 +1124,17 @@ def print_quality_breakdown(
                 severity,
                 2
             )
+
+        # Repeated low-severity findings get lighter
+        # deductions so they do not dominate the score.
+        elif (
+            severity == "LOW"
+            and finding_type in repeated_low_deductions
+        ):
+
+            deduction = repeated_low_deductions[
+                finding_type
+            ]
 
         else:
 
