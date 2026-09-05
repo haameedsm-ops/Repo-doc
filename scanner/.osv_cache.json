@@ -1,50 +1,50 @@
 {
   "npm:react:19.2.8": {
-    "timestamp": 1788157303.0559413,
+    "timestamp": 1788598907.930904,
     "vulnerabilities": []
   },
   "npm:react-dom:19.2.8": {
-    "timestamp": 1788157303.0559413,
+    "timestamp": 1788598907.930904,
     "vulnerabilities": []
   },
   "npm:react-icons:5.7.0": {
-    "timestamp": 1788157303.0559413,
+    "timestamp": 1788598907.930904,
     "vulnerabilities": []
   },
   "npm:@eslint/js:10.0.1": {
-    "timestamp": 1788157303.0559413,
+    "timestamp": 1788598907.930904,
     "vulnerabilities": []
   },
   "npm:@types/react:19.2.17": {
-    "timestamp": 1788157303.0559413,
+    "timestamp": 1788598907.930904,
     "vulnerabilities": []
   },
   "npm:@types/react-dom:19.2.3": {
-    "timestamp": 1788157303.0559413,
+    "timestamp": 1788598907.930904,
     "vulnerabilities": []
   },
   "npm:@vitejs/plugin-react:6.0.4": {
-    "timestamp": 1788157303.0559413,
+    "timestamp": 1788598907.930904,
     "vulnerabilities": []
   },
   "npm:eslint:10.8.0": {
-    "timestamp": 1788157303.0559413,
+    "timestamp": 1788598907.930904,
     "vulnerabilities": []
   },
   "npm:eslint-plugin-react-hooks:7.1.1": {
-    "timestamp": 1788157303.0559413,
+    "timestamp": 1788598907.930904,
     "vulnerabilities": []
   },
   "npm:eslint-plugin-react-refresh:0.5.3": {
-    "timestamp": 1788157303.0559413,
+    "timestamp": 1788598907.930904,
     "vulnerabilities": []
   },
   "npm:globals:17.7.0": {
-    "timestamp": 1788157303.0559413,
+    "timestamp": 1788598907.930904,
     "vulnerabilities": []
   },
   "npm:vite:8.2.0": {
-    "timestamp": 1788157303.0559413,
+    "timestamp": 1788598907.930904,
     "vulnerabilities": []
   },
   "npm:concurrently:8.2.2": {
@@ -189,5 +189,26 @@
         "modified": "2026-07-08T08:11:13.328634Z"
       }
     ]
+  },
+  "Maven:org.springframework:spring-core:6.1.0": {
+    "timestamp": 1788601552.992003,
+    "vulnerabilities": [
+      {
+        "id": "GHSA-659m-px2c-25wj",
+        "modified": "2026-07-31T21:29:55.714931Z"
+      },
+      {
+        "id": "GHSA-jmp9-x22r-554x",
+        "modified": "2026-02-04T02:59:53.509459Z"
+      }
+    ]
+  },
+  "Maven:com.google.guava:guava:33.0.0-jre": {
+    "timestamp": 1788601552.992003,
+    "vulnerabilities": []
+  },
+  "Maven:org.junit.jupiter:junit-jupiter:5.10.0": {
+    "timestamp": 1788601552.992003,
+    "vulnerabilities": []
   }
 }

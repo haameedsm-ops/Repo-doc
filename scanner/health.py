@@ -5,32 +5,33 @@
 
 def calculate_security_score(findings):
     """
-    Calculate a practical security health score out of 100.
+    Calculate security health score out of 100.
 
-    Security scoring considers:
-    - Hardcoded secrets
-    - Vulnerable packages
-    - Number of vulnerabilities
-
-    Vulnerabilities belonging to the same package are not
-    treated as separate vulnerable packages.
+    Rules:
+    - Each unique secret: -15 points, max -60
+    - First unique vulnerable package: -12
+    - Each additional unique vulnerable package: -8
+    - Each additional vulnerability on a vulnerable package: -2
+    - Same package/version in multiple manifests is counted once.
+    - Dependencies with zero vulnerabilities are ignored.
     """
 
     score = 100
 
     secret_count = 0
-    vulnerable_packages = 0
-    total_vulnerabilities = 0
+
+    # Unique vulnerable package/version combinations
+    vulnerable_packages = set()
+
+    # Maximum vulnerability count for each package/version
+    vulnerability_counts = {}
 
     for finding in findings:
 
-        finding_type = finding.get(
-            "type",
-            ""
-        )
+        finding_type = finding.get("type", "")
 
         # ----------------------------------------------------
-        # Secrets
+        # SECRETS
         # ----------------------------------------------------
 
         if finding_type in {
@@ -38,37 +39,69 @@ def calculate_security_score(findings):
             "Password",
             "Token"
         }:
-
             secret_count += 1
 
         # ----------------------------------------------------
-        # Vulnerable dependencies
+        # VULNERABLE DEPENDENCY
         # ----------------------------------------------------
 
         elif finding_type == "Vulnerable Dependency":
 
-            vulnerable_packages += 1
+            package_name = finding.get("package")
+
+            version = finding.get(
+                "version",
+                "unspecified"
+            )
+
+            if not package_name:
+                continue
 
             try:
-
-                count = int(
-                    finding.get(
-                        "count",
-                        1
-                    )
+                vulnerability_count = int(
+                    finding.get("count", 0)
                 )
+            except (TypeError, ValueError):
+                vulnerability_count = 0
 
-            except (
-                TypeError,
-                ValueError
-            ):
+            if vulnerability_count <= 0:
+                continue
 
-                count = 1
+            package_key = (
+                package_name,
+                version
+            )
 
-            total_vulnerabilities += count
+            vulnerable_packages.add(
+                package_key
+            )
+
+            previous_count = vulnerability_counts.get(
+                package_key,
+                0
+            )
+
+            vulnerability_counts[
+                package_key
+            ] = max(
+                previous_count,
+                vulnerability_count
+            )
 
     # --------------------------------------------------------
-    # Secret penalty
+    # COUNTS
+    # --------------------------------------------------------
+
+    vulnerable_package_count = len(
+        vulnerable_packages
+    )
+
+    total_vulnerabilities = sum(
+        vulnerability_counts.values()
+    )
+
+    # --------------------------------------------------------
+    # SECRET PENALTY
     # --------------------------------------------------------
 
     score -= min(
@@ -77,20 +110,15 @@ def calculate_security_score(findings):
     )
 
     # --------------------------------------------------------
-    # Vulnerable package penalty
-    #
-    # First vulnerable package = 12
-    # Additional packages = 8 each
-    # Maximum = 40
+    # VULNERABLE PACKAGE PENALTY
     # --------------------------------------------------------
 
-    if vulnerable_packages:
+    if vulnerable_package_count > 0:
 
         package_penalty = (
             12
-            + max(
-                vulnerable_packages - 1,
-                0
+            + (
+                vulnerable_package_count - 1
             ) * 8
         )
 
@@ -100,19 +128,15 @@ def calculate_security_score(findings):
         )
 
     # --------------------------------------------------------
-    # Additional vulnerability penalty
-    #
-    # We already penalized the package itself.
-    # Only additional vulnerabilities create a smaller
-    # extra penalty.
+    # ADDITIONAL VULNERABILITY PENALTY
     # --------------------------------------------------------
 
-    if total_vulnerabilities > vulnerable_packages:
+    additional_vulnerabilities = (
+        total_vulnerabilities
+        - vulnerable_package_count
+    )
 
-        additional_vulnerabilities = (
-            total_vulnerabilities
-            - vulnerable_packages
-        )
+    if additional_vulnerabilities > 0:
 
         score -= min(
             additional_vulnerabilities * 2,
@@ -290,9 +314,9 @@ def generate_diagnosis(
     Security, quality, and dependency issues are grouped
     by severity.
 
-    Each vulnerable dependency is represented using its
-    actual package name, version, vulnerability count,
-    and vulnerability IDs.
+    Vulnerable dependencies are grouped by unique
+    package name + version, even when the same dependency
+    appears in multiple manifest files.
     """
 
     diagnosis = {
@@ -385,6 +409,19 @@ def generate_diagnosis(
         "CRITICAL": 4
     }
 
+    # --------------------------------------------------------
+    # Group the same package/version across manifests
+    #
+    # Example:
+    #
+    # build.gradle -> spring-core 6.1.0
+    # pom.xml      -> spring-core 6.1.0
+    #
+    # These become ONE diagnosis entry.
+    # --------------------------------------------------------
+
+    grouped_dependencies = {}
+
     for result in dependency_results:
 
         # ----------------------------------------------------
@@ -409,8 +446,112 @@ def generate_diagnosis(
         if not version:
             version = "unspecified"
 
-        if not isinstance(vulnerabilities, list):
+        if not isinstance(
+            vulnerabilities,
+            list
+        ):
             vulnerabilities = []
+
+        if not vulnerabilities:
+            continue
+
+        # ----------------------------------------------------
+        # Unique package key
+        # ----------------------------------------------------
+
+        package_key = (
+            name,
+            version
+        )
+
+        if package_key not in grouped_dependencies:
+
+            grouped_dependencies[package_key] = {
+
+                "name": name,
+
+                "version": version,
+
+                "vulnerabilities": [],
+
+                "files": []
+
+            }
+
+        grouped = grouped_dependencies[
+            package_key
+        ]
+
+        # ----------------------------------------------------
+        # Collect vulnerabilities without duplicates
+        # ----------------------------------------------------
+
+        existing_ids = {
+            vulnerability.get("id")
+            for vulnerability
+            in grouped["vulnerabilities"]
+            if isinstance(
+                vulnerability,
+                dict
+            )
+        }
+
+        for vulnerability in vulnerabilities:
+
+            if not isinstance(
+                vulnerability,
+                dict
+            ):
+                continue
+
+            vulnerability_id = vulnerability.get(
+                "id"
+            )
+
+            if vulnerability_id not in existing_ids:
+
+                grouped["vulnerabilities"].append(
+                    vulnerability
+                )
+
+                if vulnerability_id:
+                    existing_ids.add(
+                        vulnerability_id
+                    )
+
+        # ----------------------------------------------------
+        # Collect manifest file
+        # ----------------------------------------------------
+
+        dependency_file = result.get(
+            "file"
+        )
+
+        if dependency_file:
+
+            if dependency_file not in grouped["files"]:
+
+                grouped["files"].append(
+                    dependency_file
+                )
+
+    # ========================================================
+    # CREATE DIAGNOSIS FOR UNIQUE PACKAGES
+    # ========================================================
+
+    for package_data in grouped_dependencies.values():
+
+        name = package_data["name"]
+
+        version = package_data["version"]
+
+        vulnerabilities = package_data[
+            "vulnerabilities"
+        ]
+
+        files = package_data[
+            "files"
+        ]
 
         if not vulnerabilities:
             continue
@@ -437,12 +578,18 @@ def generate_diagnosis(
             ).upper()
 
             if vulnerability_severity not in severity_rank:
+
                 vulnerability_severity = "HIGH"
 
             if (
-                severity_rank[vulnerability_severity]
-                > severity_rank[package_severity]
+                severity_rank[
+                    vulnerability_severity
+                ]
+                > severity_rank[
+                    package_severity
+                ]
             ):
+
                 package_severity = (
                     vulnerability_severity
                 )
@@ -465,16 +612,75 @@ def generate_diagnosis(
                 "id"
             )
 
-            if vulnerability_id:
+            if (
+                vulnerability_id
+                and vulnerability_id
+                not in vulnerability_ids
+            ):
+
                 vulnerability_ids.append(
                     vulnerability_id
                 )
 
         # ----------------------------------------------------
-        # Create ONE diagnosis entry per package
+        # Format manifest names
         # ----------------------------------------------------
 
-        diagnosis[package_severity].append({
+        manifest_names = []
+
+        for file_path in files:
+
+            if not file_path:
+                continue
+
+            file_name = str(
+                file_path
+            ).replace(
+                "\\",
+                "/"
+            ).split(
+                "/"
+            )[-1]
+
+            if file_name not in manifest_names:
+
+                manifest_names.append(
+                    file_name
+                )
+
+        # ----------------------------------------------------
+        # Build details message
+        # ----------------------------------------------------
+
+        vulnerability_count = len(
+            vulnerabilities
+        )
+
+        details = (
+            f"{name} "
+            f"{version} "
+            f"has "
+            f"{vulnerability_count} "
+            f"known vulnerabilit"
+            f"{'y' if vulnerability_count == 1 else 'ies'}"
+        )
+
+        if manifest_names:
+
+            details += (
+                " | Declared in: "
+                + ", ".join(
+                    manifest_names
+                )
+            )
+
+        # ----------------------------------------------------
+        # Add ONE diagnosis entry
+        # ----------------------------------------------------
+
+        diagnosis[
+            package_severity
+        ].append({
 
             "category":
                 "Dependency Security",
@@ -489,24 +695,21 @@ def generate_diagnosis(
                 version,
 
             "vulnerability_count":
-                len(vulnerabilities),
+                vulnerability_count,
 
             "ids":
                 vulnerability_ids,
 
+            "files":
+                manifest_names,
+
             "details":
-                (
-                    f"{name} "
-                    f"{version} "
-                    f"has "
-                    f"{len(vulnerabilities)} "
-                    f"known vulnerabilit"
-                    f"{'y' if len(vulnerabilities) == 1 else 'ies'}"
-                )
+                details
 
         })
 
     return diagnosis
+
 # ============================================================
 # PRINT PRIORITIZED DIAGNOSIS
 # ============================================================

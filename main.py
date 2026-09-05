@@ -12,7 +12,9 @@ from scanner.git_analysis import (
 from scanner.dependencies import (
     find_dependency_files,
     parse_requirements,
-    parse_package_json
+    parse_package_json,
+    parse_pom_xml,
+    parse_build_gradle
 )
 
 from scanner.health import (
@@ -64,6 +66,76 @@ def run_stage(name, function, *args):
     )
 
     return result
+
+
+# ============================================================
+# VULNERABILITY SEVERITY HELPER
+# ============================================================
+
+SEVERITY_RANK = {
+    "LOW": 1,
+    "MEDIUM": 2,
+    "HIGH": 3,
+    "CRITICAL": 4
+}
+
+
+def get_vulnerability_severity(vulnerabilities):
+    """
+    Return the highest severity among all vulnerabilities.
+    """
+
+    highest = "LOW"
+
+    for vulnerability in vulnerabilities:
+
+        severity = vulnerability.get(
+            "severity"
+        )
+
+        # OSV may provide severity as a string
+        if isinstance(severity, str):
+
+            severity = severity.upper()
+
+            if severity in SEVERITY_RANK:
+
+                if (
+                    SEVERITY_RANK[severity]
+                    >
+                    SEVERITY_RANK[highest]
+                ):
+
+                    highest = severity
+
+        # Some vulnerability databases may
+        # store severity inside database_specific
+        database_specific = vulnerability.get(
+            "database_specific",
+            {}
+        )
+
+        if isinstance(database_specific, dict):
+
+            db_severity = database_specific.get(
+                "severity"
+            )
+
+            if isinstance(db_severity, str):
+
+                db_severity = db_severity.upper()
+
+                if db_severity in SEVERITY_RANK:
+
+                    if (
+                        SEVERITY_RANK[db_severity]
+                        >
+                        SEVERITY_RANK[highest]
+                    ):
+
+                        highest = db_severity
+
+    return highest
 
 
 # ============================================================
@@ -207,7 +279,8 @@ dependency_results = []
 
 dependency_groups = {
     "PyPI": [],
-    "npm": []
+    "npm": [],
+    "Maven": []
 }
 
 
@@ -231,10 +304,7 @@ for file in dependency_files:
 
         for dependency in dependencies:
 
-            # IMPORTANT:
             # Store complete manifest path
-            # instead of only "requirements.txt"
-
             dependency["_file"] = str(
                 file.resolve()
             )
@@ -257,16 +327,46 @@ for file in dependency_files:
 
         for dependency in dependencies:
 
-            # IMPORTANT:
             # Store complete manifest path
-            # instead of only "package.json"
-
             dependency["_file"] = str(
                 file.resolve()
             )
 
             dependency_groups[
                 "npm"
+            ].append(
+                dependency
+            )
+
+    # --------------------------------------------------------
+    # JAVA - MAVEN / GRADLE
+    # --------------------------------------------------------
+
+    elif filename in {
+        "pom.xml",
+        "build.gradle"
+    }:
+
+        if filename == "pom.xml":
+
+            dependencies = parse_pom_xml(
+                file
+            )
+
+        else:
+
+            dependencies = parse_build_gradle(
+                file
+            )
+
+        for dependency in dependencies:
+
+            dependency["_file"] = str(
+                file.resolve()
+            )
+
+            dependency_groups[
+                "Maven"
             ].append(
                 dependency
             )
@@ -286,9 +386,25 @@ for ecosystem in dependency_groups:
         ecosystem
     ]:
 
+        # ----------------------------------------------------
+        # A dependency is considered duplicate only when:
+        #
+        # 1. Same package
+        # 2. Same version
+        # 3. Same dependency manifest
+        #
+        # This allows the same dependency to appear in:
+        #
+        # build.gradle
+        # pom.xml
+        #
+        # without one being incorrectly removed.
+        # ----------------------------------------------------
+
         key = (
             dependency.get("name"),
-            dependency.get("version")
+            dependency.get("version"),
+            dependency.get("_file")
         )
 
         if key in seen_dependencies:
@@ -306,14 +422,13 @@ for ecosystem in dependency_groups:
         ecosystem
     ] = unique_dependencies
 
-
 # ============================================================
 # VULNERABILITY SCAN
 # ============================================================
 
 python_vulnerabilities = {}
-
 npm_vulnerabilities = {}
+maven_vulnerabilities = {}
 
 
 # ------------------------------------------------------------
@@ -356,6 +471,26 @@ if dependency_groups["npm"]:
     )
 
 
+# ------------------------------------------------------------
+# MAVEN VULNERABILITIES
+# ------------------------------------------------------------
+
+if dependency_groups["Maven"]:
+
+    print(
+        f"\n🔐 Scanning "
+        f"{len(dependency_groups['Maven'])} "
+        f"Maven dependencies..."
+    )
+
+    maven_vulnerabilities = run_stage(
+        "Maven vulnerability scan",
+        check_vulnerabilities_batch,
+        dependency_groups["Maven"],
+        "Maven"
+    )
+
+
 # ============================================================
 # BUILD DEPENDENCY RESULTS
 # ============================================================
@@ -368,10 +503,16 @@ for ecosystem, dependencies in dependency_groups.items():
             python_vulnerabilities
         )
 
-    else:
+    elif ecosystem == "npm":
 
         vulnerability_map = (
             npm_vulnerabilities
+        )
+
+    else:
+
+        vulnerability_map = (
+            maven_vulnerabilities
         )
 
     for dependency in dependencies:
@@ -410,29 +551,19 @@ for ecosystem, dependencies in dependency_groups.items():
         # ----------------------------------------------------
 
         if vulnerabilities:
+           highest_severity = get_vulnerability_severity(
+           vulnerabilities
+        )
 
-            dependency_findings.append({
-
-                "type":
-                    "Vulnerable Dependency",
-
-                "package":
-                    name,
-
-                "version":
-                    version,
-
-                "count":
-                    len(vulnerabilities),
-
-                "severity":
-                    "HIGH",
-
-                "confidence":
-                    100
-
-            })
-
+        dependency_findings.append({
+           "type": "Vulnerable Dependency",
+           "package": name,
+           "version": version,
+           "count": len(vulnerabilities),
+           "severity": highest_severity,
+           "confidence": 100,
+           "file": dependency["_file"]
+    })
 
 # ============================================================
 # COMBINE SECURITY FINDINGS
@@ -493,6 +624,7 @@ print(
     f"Lines of code: {lines}"
 )
 
+
 # ============================================================
 # REPO DOCTOR CONFIGURATION
 # ============================================================
@@ -508,13 +640,17 @@ print(
 config_file = repo / ".repo-doctor.json"
 
 if config_file.exists():
+
     print(
         "Configuration: .repo-doctor.json"
     )
+
 else:
+
     print(
         "Configuration: Default thresholds"
     )
+
 
 thresholds = config.get(
     "thresholds",
@@ -540,6 +676,7 @@ print(
     f"HTML threshold:       "
     f"{thresholds.get('html', 1000)}"
 )
+
 
 # ============================================================
 # PROJECT DNA
@@ -755,8 +892,11 @@ else:
 
         if filename not in {
             "requirements.txt",
-            "package.json"
+            "package.json",
+            "pom.xml",
+            "build.gradle"
         }:
+
             continue
 
         # ----------------------------------------------------
@@ -1022,6 +1162,7 @@ print(
     f"{documentation_score}/100"
 )
 
+
 print_quality_breakdown(
     quality_score,
     quality_findings
@@ -1041,6 +1182,7 @@ diagnosis = generate_diagnosis(
 print_diagnosis(
     diagnosis
 )
+
 
 # ============================================================
 # PERFORMANCE SUMMARY

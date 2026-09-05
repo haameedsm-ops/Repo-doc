@@ -3,6 +3,7 @@ import os
 import re
 import json
 import requests
+import xml.etree.ElementTree as ET
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -259,6 +260,270 @@ def parse_package_json(file):
 
     return dependencies
 
+# ============================================================
+# MAVEN POM.XML
+# ============================================================
+
+# ============================================================
+# MAVEN POM.XML
+# ============================================================
+
+def parse_pom_xml(file):
+    """
+    Parse Maven pom.xml dependencies.
+
+    Supports Maven POM files with or without XML namespaces.
+
+    Example:
+
+        <dependency>
+            <groupId>org.springframework</groupId>
+            <artifactId>spring-core</artifactId>
+            <version>6.1.0</version>
+        </dependency>
+
+    Becomes:
+
+        {
+            "name": "org.springframework:spring-core",
+            "version": "6.1.0"
+        }
+    """
+
+    dependencies = []
+
+    try:
+        tree = ET.parse(file)
+        root = tree.getroot()
+
+    except (
+        ET.ParseError,
+        OSError
+    ):
+        return dependencies
+
+    # --------------------------------------------------------
+    # Helper to get XML tag name without namespace
+    # --------------------------------------------------------
+
+    def clean_tag(tag):
+        return tag.split("}")[-1]
+
+    # --------------------------------------------------------
+    # Helper to get child text
+    # --------------------------------------------------------
+
+    def get_child_text(parent, child_name):
+
+        for child in parent:
+
+            if clean_tag(child.tag) == child_name:
+
+                if child.text:
+                    return child.text.strip()
+
+                return ""
+
+        return ""
+
+    # --------------------------------------------------------
+    # Find every <dependency> element
+    # --------------------------------------------------------
+
+    for dependency in root.iter():
+
+        if clean_tag(dependency.tag) != "dependency":
+            continue
+
+        group = get_child_text(
+            dependency,
+            "groupId"
+        )
+
+        artifact = get_child_text(
+            dependency,
+            "artifactId"
+        )
+
+        version = get_child_text(
+            dependency,
+            "version"
+        )
+
+        # ----------------------------------------------------
+        # Skip incomplete dependencies
+        # ----------------------------------------------------
+
+        if not group or not artifact:
+            continue
+
+        # ----------------------------------------------------
+        # Maven properties such as:
+        #
+        # ${spring.version}
+        #
+        # cannot currently be resolved.
+        # ----------------------------------------------------
+
+        if not version:
+
+            version = "unspecified"
+
+        elif (
+            version.startswith("${")
+            and version.endswith("}")
+        ):
+
+            version = "unspecified"
+
+        dependencies.append({
+            "name": f"{group}:{artifact}",
+            "version": version
+        })
+
+    return dependencies
+
+# ============================================================
+# GRADLE BUILD.GRADLE
+# ============================================================
+
+def parse_build_gradle(file):
+    """
+    Parse dependencies from build.gradle.
+
+    Supports common Gradle dependency formats:
+
+        implementation 'group:artifact:version'
+
+        implementation "group:artifact:version"
+
+        implementation('group:artifact:version')
+
+        implementation("group:artifact:version")
+
+        api 'group:artifact:version'
+
+        testImplementation 'group:artifact:version'
+
+        runtimeOnly 'group:artifact:version'
+
+    Example:
+
+        implementation 'org.springframework:spring-core:6.1.0'
+
+    Becomes:
+
+        {
+            "name": "org.springframework:spring-core",
+            "version": "6.1.0"
+        }
+    """
+
+    dependencies = []
+
+    try:
+        content = file.read_text(
+            encoding="utf-8",
+            errors="ignore"
+        )
+
+    except (
+        PermissionError,
+        OSError
+    ):
+        return dependencies
+
+    # --------------------------------------------------------
+    # Remove comments
+    # --------------------------------------------------------
+
+    content = re.sub(
+        r"//.*",
+        "",
+        content
+    )
+
+    content = re.sub(
+        r"/\*.*?\*/",
+        "",
+        content,
+        flags=re.DOTALL
+    )
+
+    # --------------------------------------------------------
+    # Match:
+    #
+    # implementation 'group:artifact:version'
+    # implementation "group:artifact:version"
+    #
+    # api(...)
+    # testImplementation(...)
+    # runtimeOnly(...)
+    # compileOnly(...)
+    # annotationProcessor(...)
+    # --------------------------------------------------------
+
+    pattern = re.compile(
+        r"""
+        \b
+        (?:implementation
+        |api
+        |compileOnly
+        |runtimeOnly
+        |testImplementation
+        |testCompileOnly
+        |testRuntimeOnly
+        |annotationProcessor)
+        \s*
+        \(?
+        \s*
+        ['"]
+        ([A-Za-z0-9_.-]+)
+        :
+        ([A-Za-z0-9_.-]+)
+        :
+        ([A-Za-z0-9_.${}-]+)
+        ['"]
+        \)?
+        """,
+        re.VERBOSE
+    )
+
+    seen = set()
+
+    for match in pattern.finditer(content):
+
+        group = match.group(1)
+        artifact = match.group(2)
+        version = match.group(3)
+
+        name = f"{group}:{artifact}"
+
+        # ----------------------------------------------------
+        # Gradle variables such as:
+        #
+        # implementation "org.foo:bar:$barVersion"
+        #
+        # cannot be resolved yet.
+        # ----------------------------------------------------
+
+        if (
+            version.startswith("${")
+            or version.startswith("$")
+        ):
+            version = "unspecified"
+
+        if name in seen:
+            continue
+
+        seen.add(name)
+
+        dependencies.append({
+            "name": name,
+            "version": version
+        })
+
+    return dependencies
 
 # ============================================================
 # CLEAN NPM VERSION
@@ -298,6 +563,10 @@ def clean_npm_version(version):
 # GENERIC PARSER
 # ============================================================
 
+# ============================================================
+# GENERIC PARSER
+# ============================================================
+
 def parse_dependency_file(file):
     """
     Parse a supported dependency manifest.
@@ -311,8 +580,13 @@ def parse_dependency_file(file):
     if filename == "package.json":
         return parse_package_json(file)
 
-    return []
+    if filename == "pom.xml":
+        return parse_pom_xml(file)
 
+    if filename == "build.gradle":
+        return parse_build_gradle(file)
+
+    return []
 
 # ============================================================
 # VERSION PARSER
@@ -422,7 +696,66 @@ def get_latest_pypi_version(package):
 
         return None
 
+# ============================================================
+# CHECK JAVA DEPENDENCY AGAINST OSV
+# ============================================================
 
+def check_java_dependency_vulnerability(
+    name,
+    version
+):
+    """
+    Check a Maven/Gradle dependency against OSV.
+
+    name format:
+
+        groupId:artifactId
+
+    Example:
+
+        org.springframework:spring-core
+    """
+
+    if (
+        not name
+        or not version
+        or version == "unspecified"
+    ):
+        return []
+
+    try:
+        url = "https://api.osv.dev/v1/query"
+
+        payload = {
+            "version": version,
+            "package": {
+                "name": name,
+                "ecosystem": "Maven"
+            }
+        }
+
+        response = SESSION.post(
+            url,
+            json=payload,
+            timeout=NETWORK_TIMEOUT
+        )
+
+        if response.status_code != 200:
+            return []
+
+        data = response.json()
+
+        return data.get(
+            "vulns",
+            []
+        )
+
+    except (
+        requests.RequestException,
+        ValueError
+    ):
+        return []
+    
 # ============================================================
 # CHECK ONE DEPENDENCY
 # ============================================================
